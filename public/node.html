@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>draw.io 节点</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: #14161a; color: #dfe3ea; font: 13px/1.5 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: #1d2027; border-bottom: 1px solid #2c313c; flex: none; flex-wrap: wrap; }
+  header b { color: #8ab4f8; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 4px; background: #666; }
+  .dot.on { background: #3ddc84; }
+  .dot.off { background: #ff5f57; }
+  button { background: #2b6cb0; border: 0; color: #fff; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  button:hover { background: #3182ce; }
+  button.ghost { background: #3a4150; }
+  button.ghost:hover { background: #495163; }
+  label { display: flex; align-items: center; gap: 4px; color: #9aa3b2; user-select: none; }
+  #msg { margin-left: auto; color: #9aa3b2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+  #msg.err { color: #ff8a80; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #left { width: 42%; min-width: 280px; display: flex; flex-direction: column; border-right: 1px solid #2c313c; }
+  #src { flex: 1; resize: none; border: 0; outline: 0; background: #0f1115; color: #a5d6a7; font: 12px/1.45 "Cascadia Code", Consolas, monospace; padding: 10px; white-space: pre; overflow: auto; }
+  #right { flex: 1; min-width: 0; }
+  #drawio { width: 100%; height: 100%; border: 0; background: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <b>draw.io 节点</b> <span id="nid"></span>
+  <span><span id="wsDot" class="dot off"></span>通道</span>
+  <span><span id="edDot" class="dot off"></span>编辑器</span>
+  <button id="btnPull" title="从右侧编辑器取回当前图形 XML 到左侧">更新源码</button>
+  <button id="btnPush" class="ghost" title="把左侧源码载入右侧编辑器">应用到编辑器</button>
+  <button id="btnCheck" class="ghost" title="对左侧源码做编译检查">检查错误</button>
+  <label><input type="checkbox" id="fmt" checked>格式化</label>
+  <span id="msg"></span>
+</header>
+<main>
+  <section id="left"><textarea id="src" spellcheck="false"></textarea></section>
+  <section id="right"><iframe id="drawio" allow="clipboard-read; clipboard-write"></iframe></section>
+</main>
+<script>
+(function () {
+  var EMPTY_XML = '<mxfile host="embed"><diagram name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>';
+  var nodeId = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+  var $ = function (id) { return document.getElementById(id); };
+  var iframe = $('drawio'), src = $('src'), msg = $('msg');
+
+  $('nid').textContent = nodeId;
+  iframe.src = '/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
+
+  var currentXml = EMPTY_XML;
+  var editorReady = false;
+  var ws = null;
+  var exportWaiter = null;
+
+  function say(t, isErr) { msg.textContent = t; msg.className = isErr ? 'err' : ''; }
+  function setDot(el, on) { el.className = 'dot ' + (on ? 'on' : 'off'); }
+
+  function pretty(xml) {
+    if (!$('fmt').checked) return xml;
+    try {
+      var s = xml.replace(/>\s+</g, '><').replace(/></g, '>\n<');
+      var depth = 0, out = [];
+      s.split('\n').forEach(function (line) {
+        var t = line.trim();
+        if (!t) return;
+        var isClose = /^<\//.test(t);
+        var selfClose = /\/>$/.test(t);
+        var hasCloseTag = /<\/[^>]+>/.test(t);
+        var isDecl = /^<[?!]/.test(t);
+        if (isClose) depth = Math.max(0, depth - 1);
+        out.push(new Array(depth + 1).join('  ') + t);
+        if (!isClose && !selfClose && !hasCloseTag && !isDecl) depth++;
+      });
+      return out.join('\n');
+    } catch (e) { return xml; }
+  }
+
+  function setSrc(xml) { src.value = pretty(xml); }
+
+  function postToEditor(obj) {
+    if (editorReady) iframe.contentWindow.postMessage(JSON.stringify(obj), '*');
+  }
+
+  function requestExport(cb) {
+    if (!editorReady) { cb(currentXml); return; }
+    exportWaiter = cb;
+    postToEditor({ action: 'export', format: 'xml' });
+  }
+
+  function wsSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+  function reportXml(xml) { currentXml = xml; wsSend({ type: 'xml', xml: xml }); }
+
+  window.addEventListener('message', function (e) {
+    if (e.source !== iframe.contentWindow || typeof e.data !== 'string') return;
+    var m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.event === 'init') {
+      editorReady = true;
+      setDot($('edDot'), true);
+      postToEditor({ action: 'load', xml: currentXml });
+    } else if (m.event === 'load') {
+      requestExport(function (x) { setSrc(x); reportXml(x); });
+    } else if (m.event === 'export') {
+      var x = m.data || m.xml || '';
+      if (typeof x === 'string' && x.indexOf('data:') === 0) {
+        try { x = decodeURIComponent(x.split(',').slice(1).join(',')); } catch (err) {}
+      }
+      if (exportWaiter) { var cb = exportWaiter; exportWaiter = null; cb(x); }
+    } else if (m.event === 'save') {
+      if (m.xml) reportXml(m.xml); else requestExport(reportXml);
+      say('已从编辑器保存');
+    } else if (m.event === 'autosave') {
+      if (m.xml) reportXml(m.xml);
+    }
+  });
+
+  function connectWs() {
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws?node=' + encodeURIComponent(nodeId));
+    ws.onopen = function () { setDot($('wsDot'), true); };
+    ws.onclose = function () { setDot($('wsDot'), false); setTimeout(connectWs, 1500); };
+    ws.onerror = function () {};
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (err) { return; }
+      if (m.type === 'setXml') {
+        currentXml = m.xml;
+        postToEditor({ action: 'load', xml: m.xml });
+        setSrc(m.xml);
+        say('已接收推送的 XML');
+      } else if (m.type === 'getXml') {
+        requestExport(function (x) {
+          currentXml = x;
+          wsSend({ type: 'xml', requestId: m.requestId, xml: x });
+          setSrc(x);
+        });
+      }
+    };
+  }
+
+  $('btnPull').onclick = function () {
+    requestExport(function (x) { setSrc(x); reportXml(x); say('源码已更新'); });
+  };
+  $('btnPush').onclick = function () {
+    var x = src.value;
+    currentXml = x;
+    postToEditor({ action: 'load', xml: x });
+    reportXml(x);
+    say('已应用到编辑器');
+  };
+  $('btnCheck').onclick = async function () {
+    try {
+      var r = await fetch('/api/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ xml: src.value }),
+      });
+      var j = await r.json();
+      if (j.ok) say(j.warnings && j.warnings.length ? '校验通过，警告: ' + j.warnings.join('; ') : '校验通过', false);
+      else say('编译错误: ' + (j.errors || []).join('；'), true);
+    } catch (e) { say(String(e), true); }
+  };
+
+  (async function init() {
+    try {
+      var r = await fetch('/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
+      if (r.ok) {
+        var t = await r.text();
+        if (t && t.trim()) currentXml = t;
+      }
+    } catch (e) {}
+    setSrc(currentXml);
+    connectWs();
+  })();
+})();
+</script>
+</body>
+</html>

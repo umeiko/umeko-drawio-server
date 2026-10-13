@@ -1,0 +1,62 @@
+name: umeko-drawio-server
+
+services:
+  drawio:
+    image: jgraph/drawio:latest
+    restart: unless-stopped
+    environment:
+      # webapp 的 /export 及 PDF 导出都转发到独立的导出服务
+      EXPORT_URL: http://export-server:8000/
+    ports:
+      # 调试用直达端口（生产访问走 server 的 3000 代理）
+      - "127.0.0.1:8081:8080"
+    networks: [drawnet]
+
+  export-server:
+    image: jgraph/export-server:latest
+    restart: unless-stopped
+    environment:
+      # 关键：指向内网 webapp，否则默认去公网 viewer.diagrams.net 取导出页面
+      DRAWIO_BASE_URL: http://drawio:8080
+    expose:
+      - "8000"
+    volumes:
+      # 向导出服务补充字体（如中文 Noto CJK）以获得正确的 PNG 渲染
+      - ./fonts:/usr/share/fonts/drawio:ro
+    depends_on:
+      - drawio
+    networks: [drawnet]
+
+  svg-exporter:
+    build: ./exporter
+    restart: unless-stopped
+    environment:
+      PORT: "8001"
+      DRAWIO_URL: http://drawio:8080
+    expose:
+      - "8001"
+    depends_on:
+      - drawio
+    networks: [drawnet]
+
+  server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      DRAWIO_URL: http://drawio:8080
+      EXPORT_URLS: http://export-server:8000/,http://drawio:8080/export
+      SVG_EXPORT_URLS: http://svg-exporter:8001/
+      PUBLIC_BASE_URL: http://localhost:3000
+      NODE_TTL_HOURS: "24"
+    volumes:
+      - ./output:/app/output
+    depends_on:
+      - drawio
+      - export-server
+    networks: [drawnet]
+
+networks:
+  drawnet:
