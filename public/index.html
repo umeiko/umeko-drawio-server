@@ -92,7 +92,8 @@
 
 <script>
 (function () {
-  var BASE = '__BASE__'; // ALB 前缀部署时由服务端注入（如 /drawio），默认空串
+  // 运行时推导路径前缀：页面位于 <base>/node（或静态直出 /node.html），剥掉尾部即得前缀
+  var BASE = location.pathname.replace(/\/(node|index\.html)?\/?$/, '');
   var $ = function (id) { return document.getElementById(id); };
   $('mcpUrl').textContent = location.origin + BASE + '/mcp';
 

@@ -110,19 +110,9 @@ async function checkNode(node, deep) {
   return result;
 }
 
-// 页面模板：__BASE__ 占位符替换为路径前缀，保证 ALB 前缀部署下前端路径正确
-const pageCache = new Map();
-function sendPage(res, name) {
-  let html = pageCache.get(name);
-  if (!html) {
-    html = fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
-    pageCache.set(name, html);
-  }
-  res
-    .type('html')
-    .set('Cache-Control', 'no-cache')
-    .send(html.split('__BASE__').join(BASE_PATH).split('__TRANSPORT__').join(NODE_TRANSPORT));
-}
+// 页面为纯静态文件（运行时自行推导路径前缀，见各页面内 JS），clean URL 与 /xxx.html 直出均可
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const sendPage = (res, name) => res.sendFile(path.join(PUBLIC_DIR, name));
 
 // ---------- 管理员会话 ----------
 
@@ -172,6 +162,9 @@ router.get('/api', (req, res) =>
 );
 
 // ---------- 节点 REST API（节点 ID 即访问凭证，无全量列举） ----------
+
+// 前端页面运行时配置（页面静态直出，通过该接口获取服务端配置）
+router.get('/api/config', (req, res) => res.json({ ok: true, transport: NODE_TRANSPORT }));
 
 router.use('/api', express.json({ limit: '10mb' }));
 
@@ -537,8 +530,9 @@ function createMcpServer(mode) {
         const { buffer, via } = await renderDiagram(String(target), format, extra);
         const file = path.join(OUTPUT_DIR, `${label}-${Date.now()}.${format}`);
         fs.writeFileSync(file, buffer);
+        const url = `${PUBLIC_BASE_URL}/output/${path.basename(file)}`;
         const blocks = [
-          { type: 'text', text: JSON.stringify({ ok: true, file, via, bytes: buffer.length }, null, 2) },
+          { type: 'text', text: JSON.stringify({ ok: true, file, url, via, bytes: buffer.length }, null, 2) },
         ];
         if (format === 'png') {
           blocks.push({ type: 'image', data: buffer.toString('base64'), mimeType: 'image/png' });
@@ -607,6 +601,13 @@ function mountMcp(mountPath, mcpServer) {
 
 mountMcp('/mcp', createMcpServer('user'));
 mountMcp('/mcp-dev', createMcpServer('dev'));
+
+// ---------- 静态文件直出 ----------
+
+// 渲染产物直出：<base>/output/<file> 可直接下载
+router.use('/output', express.static(OUTPUT_DIR, { index: false }));
+// 前端页面静态直出（/node.html、/manage.html 等）；index:false 避免覆盖根路径的编辑器代理
+router.use(express.static(PUBLIC_DIR, { index: false }));
 
 // ---------- draw.io 原生编辑器（反向代理到 drawio 容器，挂在根路径） ----------
 

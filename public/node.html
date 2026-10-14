@@ -57,13 +57,18 @@
 <script>
 (function () {
   var EMPTY_XML = '<mxfile host="embed"><diagram name="Page-1"><mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/></root></mxGraphModel></diagram></mxfile>';
-  var nodeId = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+  // 运行时推导：页面位于 <base>/node/<id>（或静态直出 /node.html?id=<id>）
+  var pathMatch = location.pathname.match(/^(.*)\/node\/([^/]+)\/?$/);
+  var BASE = pathMatch ? pathMatch[1] : location.pathname.replace(/\/node\.html$/, '');
+  var nodeId = pathMatch
+    ? decodeURIComponent(pathMatch[2])
+    : (new URLSearchParams(location.search).get('id') || '');
   var $ = function (id) { return document.getElementById(id); };
   var iframe = $('drawio'), src = $('src'), msg = $('msg');
   var mainEl = $('main'), leftEl = $('left'), splitter = $('splitter'), expandStrip = $('expandStrip');
 
   $('nid').textContent = nodeId;
-  iframe.src = '__BASE__/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
+  iframe.src = BASE + '/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
 
   var currentXml = EMPTY_XML;
   var editorReady = false;
@@ -71,11 +76,11 @@
   var es = null;
   var exportWaiter = null;
 
-  // 通道传输方式：URL ?transport=ws|sse 优先，其次服务端全局配置，默认 auto（WS 优先，连不上自动降级 SSE）
+  // 通道传输方式：URL ?transport=ws|sse 优先，其次服务端全局配置（/api/config 拉取），默认 auto（WS 优先，连不上自动降级 SSE）
   var FORCE_TRANSPORT = new URLSearchParams(location.search).get('transport');
-  var SERVER_TRANSPORT = '__TRANSPORT__';
-  var transportMode = FORCE_TRANSPORT || (SERVER_TRANSPORT === 'auto' ? '' : SERVER_TRANSPORT);
-  var usingSse = transportMode === 'sse';
+  var SERVER_TRANSPORT = 'auto';
+  var transportMode = FORCE_TRANSPORT || '';
+  var usingSse = false;
 
   function say(t, isErr) { msg.textContent = t; msg.className = isErr ? 'err' : ''; }
   function setDot(el, on) { el.className = 'dot ' + (on ? 'on' : 'off'); }
@@ -176,9 +181,15 @@
     }
   }
 
+  function applyTransport(t) {
+    SERVER_TRANSPORT = t === 'ws' || t === 'sse' ? t : 'auto';
+    transportMode = FORCE_TRANSPORT || (SERVER_TRANSPORT === 'auto' ? '' : SERVER_TRANSPORT);
+    usingSse = transportMode === 'sse';
+  }
+
   function channelSend(o) {
     if (usingSse) {
-      fetch('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/report', {
+      fetch(BASE + '/api/nodes/' + encodeURIComponent(nodeId) + '/report', {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
         body: JSON.stringify(o),
@@ -198,7 +209,7 @@
         connectSse();
       }
     }, 3000);
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '__BASE__/ws?node=' + encodeURIComponent(nodeId));
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + BASE + '/ws?node=' + encodeURIComponent(nodeId));
     ws.onopen = function () {
       opened = true;
       clearTimeout(fbTimer);
@@ -225,7 +236,7 @@
 
   function connectSse() {
     if (es) return;
-    es = new EventSource('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/events');
+    es = new EventSource(BASE + '/api/nodes/' + encodeURIComponent(nodeId) + '/events');
     es.onopen = function () {
       setDot($('wsDot'), true);
       $('wsDot').parentNode.title = 'SSE 通道（ALB 兼容模式）';
@@ -281,7 +292,7 @@
   };
   $('btnCheck').onclick = async function () {
     try {
-      var r = await fetch('__BASE__/api/validate', {
+      var r = await fetch(BASE + '/api/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ xml: src.value }),
@@ -300,11 +311,16 @@
       localStorage.setItem('node.history', JSON.stringify(h.slice(0, 20)));
     } catch (e) {}
     try {
-      var r = await fetch('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
+      var r = await fetch(BASE + '/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
       if (r.ok) {
         var t = await r.text();
         if (t && t.trim()) currentXml = t;
       }
+    } catch (e) {}
+    // 拉取服务端通道配置（全局强制 ws/sse 时生效），随后建立通道
+    try {
+      var cfg = await (await fetch(BASE + '/api/config')).json();
+      if (cfg && cfg.transport) applyTransport(cfg.transport);
     } catch (e) {}
     setSrc(currentXml);
     connect();

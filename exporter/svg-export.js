@@ -1,5 +1,5 @@
-// 内网 SVG 导出服务：用无头 Chrome 打开自托管 drawio 编辑器（embed 协议），
-// 载入 XML 后取回编辑器客户端导出的 SVG。基于 jgraph/export-server 镜像构建，
+// 内网导出服务：用无头 Chrome 打开自托管 drawio 编辑器（embed 协议），
+// 载入 XML 后取回编辑器客户端导出的 SVG/PNG/JPG。基于 jgraph/export-server 镜像构建，
 // 复用其中的 Chrome + puppeteer，完全离线。
 const express = require('express');
 const puppeteer = require('puppeteer');
@@ -60,7 +60,7 @@ async function getBrowser() {
   return browserPromise;
 }
 
-async function exportSvg(xml, opts) {
+async function exportDrawio(xml, opts) {
   const browser = await getBrowser();
   const page = await browser.newPage();
   try {
@@ -80,7 +80,7 @@ async function exportSvg(xml, opts) {
           const requestExport = () => {
             if (exportSent) return;
             exportSent = true;
-            send({ action: 'export', format: 'svg', scale: options.scale, bg: options.bg, border: options.border });
+            send({ action: 'export', format: options.format, scale: options.scale, bg: options.bg, border: options.border });
           };
           window.addEventListener('message', (e) => {
             if (e.source !== iframe.contentWindow || typeof e.data !== 'string') return;
@@ -112,26 +112,31 @@ async function exportSvg(xml, opts) {
   }
 }
 
+const MIME = { svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+
+// 编辑器导出结果为 data URI：svg 为 URL 编码文本，png/jpg 为 base64
 function decodeDataUri(data) {
   if (typeof data !== 'string' || data === '') throw new Error('empty export result');
   if (data.startsWith('data:')) {
     const comma = data.indexOf(',');
     const meta = data.slice(0, comma);
     const payload = data.slice(comma + 1);
-    return meta.includes('base64') ? Buffer.from(payload, 'base64').toString('utf8') : decodeURIComponent(payload);
+    return meta.includes('base64')
+      ? Buffer.from(payload, 'base64')
+      : Buffer.from(decodeURIComponent(payload), 'utf8');
   }
-  return data;
+  return Buffer.from(data, 'utf8');
 }
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.post('/', (req, res) => {
   const xml = req.body && req.body.xml;
-  const format = (req.body && req.body.format) || 'svg';
+  const format = String((req.body && req.body.format) || 'svg').toLowerCase();
   if (!xml) return res.status(400).end('Missing xml');
-  if (format !== 'svg') return res.status(400).end('Unsupported Format!');
+  if (!MIME[format]) return res.status(400).end('Unsupported Format! (支持 svg/png/jpg)');
 
-  const opts = {};
+  const opts = { format };
   if (req.body.scale) opts.scale = Number(req.body.scale);
   if (req.body.bg) opts.bg = req.body.bg;
   if (req.body.border) opts.border = Number(req.body.border);
@@ -139,9 +144,9 @@ app.post('/', (req, res) => {
   // 串行处理请求，避免并发压垮无头浏览器
   queue = queue.then(async () => {
     try {
-      const svg = decodeDataUri(await exportSvg(String(xml), opts));
+      const buf = decodeDataUri(await exportDrawio(String(xml), opts));
       res.header('Access-Control-Allow-Origin', '*');
-      res.type('image/svg+xml').send(svg);
+      res.type(MIME[format]).send(buf);
     } catch (e) {
       res.status(500).end(String((e && e.message) || e));
     }

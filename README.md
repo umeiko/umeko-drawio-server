@@ -28,7 +28,11 @@
 
 > 全内网：`export-server` 通过 `DRAWIO_BASE_URL=http://drawio:8080` 强制走内网 webapp（其默认是公网 `viewer.diagrams.net`）；`svg-exporter` 直接驱动内网编辑器。整条链路无任何外联请求。
 
-## 快速开始
+## 部署方式
+
+三种方式任选其一，对外能力完全一致。
+
+### A. Docker Compose（推荐，分容器）
 
 ```bash
 docker compose up -d --build
@@ -36,16 +40,45 @@ docker compose up -d --build
 
 首次启动会拉取 `jgraph/drawio`（约 1GB，内含 Tomcat + Chrome + Puppeteer 导出服务）。
 
+### B. all-in-one 单容器
+
+四个组件（drawio webapp / export-server / svg-exporter / 主服务）打包进一个镜像，适合只想跑一个容器的场景：
+
+```bash
+docker build -f Dockerfile.allinone -t umeko-drawio-server .
+docker run -d --name drawio \
+  -p 3000:3000 \
+  -v "$PWD/output:/app/output" \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/fonts:/usr/share/fonts/drawio:ro" `# 可选：自定义字体` \
+  umeko-drawio-server
+```
+
+容器内由 `deploy/entrypoint.sh` 编排四个进程（Tomcat 启动较慢，首次就绪约 10~30 秒，健康检查通过前请稍候）。所有环境变量与 compose 方式相同，用 `-e NODE_TRANSPORT=sse` 等方式传入。
+
+### C. 裸机 Linux（不依赖 Docker）
+
+Debian/Ubuntu 一键安装（OpenJDK + Tomcat + draw.war + Chromium + Node.js 全部落本机）：
+
+```bash
+sudo bash deploy/install-linux.sh
+```
+
+完成后按提示用 `start.sh`（前台/调试）、`nohup` 或 systemd 单元启动。裸机模式下 PNG/SVG 都由本仓库的导出器（embed 协议无头导出）承担。可用环境变量覆盖：`INSTALL_DIR`、`PORT`、`DRAWIO_VERSION`、`TOMCAT_VERSION`、`NODE_MAJOR`、`CHROME_BIN`。Ubuntu 服务器版若 Chromium 只能走 snap，请自行安装 Chrome 后以 `CHROME_BIN=/path/to/chrome` 重跑。
+
+## 服务地址
+
 | 服务 | 地址 |
 | --- | --- |
 | 节点入口页（申请/进入画布） | http://localhost:3000/node |
 | draw.io 原生编辑器 | http://localhost:3000/ |
 | 节点页 | http://localhost:3000/node/:id |
 | 渲染服务 | `POST http://localhost:3000/render` |
+| 渲染产物下载 | http://localhost:3000/output/`<file>` |
 | MCP 用户态 | http://localhost:3000/mcp |
 | MCP 开发态 | http://localhost:3000/mcp-dev |
 | 管理面板 | http://localhost:3000/manage |
-| 调试直达编辑器 | http://localhost:8081/ |
+| 调试直达编辑器 | http://localhost:8081/ （仅 compose 方式） |
 
 ## 节点与入口页
 
@@ -185,6 +218,6 @@ NODE_TRANSPORT=sse docker compose up -d
 - **安全**：`/mcp` 用户态不暴露节点列举，但知道 nodeId 即可操作对应节点——节点 ID 即凭证，勿泄露；`/mcp-dev` 与 `/manage` 仅应在内网/受信环境开放；生产部署务必修改 `ADMIN_PASSWORD`。
 - **持久化**：热节点在内存中，**server 重启即丢失**；已冻结的冷节点以 XML 文件存于 `./data/cold/`（已挂载宿主机），重启后可解冻恢复。
 - 推送/校验的 XML 支持 `<mxfile>`（可含多个 `<diagram>`）或裸 `<mxGraphModel>`，非压缩格式可做完整结构校验，压缩内容仅做语法校验。
-- PNG/JPG 由官方 `jgraph/export-server` 渲染；SVG 由 `exporter/` 下自研脚本渲染（复用同镜像的 Chrome，驱动 embed 编辑器客户端导出，保证与编辑器效果一致）。
-- PNG 导出如需额外字体（如特定中文字体），放入 `./fonts` 目录即可（挂载到导出服务的 `/usr/share/fonts/drawio`）。
-- 渲染产物写入 `./output`（已挂载到宿主机），需自行定期清理；冷存储由生命周期自动清理。
+- PNG/JPG 默认由官方 `jgraph/export-server` 渲染（compose / all-in-one）；`exporter/` 下自研脚本（embed 协议无头导出）渲染 SVG，同时**也支持 PNG/JPG**——裸机 Linux 模式下用它渲染全部格式，可不依赖官方导出服务。
+- PNG 导出如需额外字体（如特定中文字体），放入 `./fonts` 目录即可（挂载到导出服务的 `/usr/share/fonts/drawio`；裸机模式已装 `fonts-noto-cjk`）。
+- 渲染产物写入 `./output`（挂载到宿主机），可直接通过 `http://localhost:3000/output/<文件名>` 下载；MCP `render_diagram` 返回结果中带 `url` 字段。产物需自行定期清理；冷存储由生命周期自动清理。
