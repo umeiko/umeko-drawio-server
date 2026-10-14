@@ -51,8 +51,10 @@ docker compose up -d --build
 
 每个「节点」是一块独立画布，ID 为 12 位加密随机串（base64url）。入口页 `http://localhost:3000/node` 提供两个功能：
 
-- **输入节点 ID 跳转**进入对应画布；
-- **申请新节点 ID**——创建后把 ID 交给你的 agent（配合 MCP 地址）即可继续绘图；页面会在本浏览器 localStorage 里保留最近使用记录。
+- **输入节点 ID 进入画布**——在当前页**内嵌打开**画布，地址栏链接保持不变（适配不支持跳转新链接的在线工具）；
+- **申请新节点 ID**——创建后把 ID 交给你的 agent（配合 MCP 地址）即可继续绘图；「打开画布」同样内嵌打开。
+
+直链 `http://localhost:3000/node/:id` 依旧合法：页面上每个节点都有「新标签页打开 ↗」入口，直接访问该链接也能进入画布。内嵌视图中按 `Esc` 或点「← 返回」回到入口页。页面会在本浏览器 localStorage 里保留最近使用记录（点击 ID 内嵌打开，点 ↗ 新标签页打开）。
 
 节点页 UI：左侧 XML 源码，右侧嵌入的完整 draw.io 编辑器。两侧**不自动同步**——点击「更新源码」才把编辑器内容取到左侧；另有「应用到编辑器」「检查错误」两个辅助按钮。源码面板支持拖动分隔条调宽（双击分隔条折叠）、点「« 源码」按钮折叠，折叠后点击左缘「源码 »」竖条展开；宽度与折叠状态保存在浏览器 localStorage。
 
@@ -134,7 +136,8 @@ Streamable HTTP 传输，两个端点：
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
 | `PORT` | `3000` | server 监听端口 |
-| `PUBLIC_BASE_URL` | `http://localhost:$PORT` | 对外展示用基础地址（节点链接、MCP 地址） |
+| `UMEKO_DRAWIO_SERVER_BASE_URL` | 空 | **显式指定完整对外基础地址**（优先级最高），可含路径前缀，如 `https://example.com/drawio`；设置后整站（页面/API/MCP/WS/编辑器代理）挂载到该前缀下 |
+| `PUBLIC_BASE_URL` | `http://localhost:$PORT` | 对外基础地址（`UMEKO_DRAWIO_SERVER_BASE_URL` 未设置时生效），同样支持路径前缀 |
 | `DRAWIO_URL` | `http://localhost:8081` | drawio webapp 上游地址（compose 内为 `http://drawio:8080`） |
 | `OUTPUT_DIR` | `./output` | 渲染产物目录 |
 | `DATA_DIR` | `./data` | 冷存储目录（`<DATA_DIR>/cold/*.xml`） |
@@ -149,6 +152,19 @@ Streamable HTTP 传输，两个端点：
 ```bash
 ADMIN_PASSWORD=secret NODE_HOT_MINUTES=60 docker compose up -d
 ```
+
+### ALB 路径前缀部署
+
+ALB 按路径转发（如 `https://example.com/drawio/*` → 本服务，且**不剥离前缀**）时：
+
+```bash
+UMEKO_DRAWIO_SERVER_BASE_URL=https://example.com/drawio docker compose up -d
+```
+
+- 整站自动挂载到 `/drawio` 前缀：`https://example.com/drawio/node`（入口页）、`.../drawio/mcp`、`.../drawio/manage` 等；API 返回的节点链接、MCP 工具返回的 URL 均自动带前缀；
+- 管理面板会话 Cookie 的 `Path`、节点页 WebSocket 路径同样随前缀调整；
+- 根路径 `/healthz` 始终保留在前缀之外，可直接作为 ALB 目标组健康检查路径；访问裸 `/` 或裸 `/drawio` 会 302 到 `/drawio/`；
+- 前提：ALB **不剥离**前缀（AWS ALB 默认行为）；若网关会剥离前缀，保持该变量不带路径即可（如 `https://example.com`）。
 
 ## 注意事项
 

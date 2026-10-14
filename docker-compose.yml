@@ -50,6 +50,8 @@ services:
       EXPORT_URLS: http://export-server:8000/,http://drawio:8080/export
       SVG_EXPORT_URLS: http://svg-exporter:8001/
       PUBLIC_BASE_URL: http://localhost:3000
+      # ALB 等网关带路径前缀时显式指定完整对外地址，如 https://example.com/drawio（优先级高于 PUBLIC_BASE_URL）
+      UMEKO_DRAWIO_SERVER_BASE_URL: "${UMEKO_DRAWIO_SERVER_BASE_URL:-}"
       NODE_HOT_MINUTES: "${NODE_HOT_MINUTES:-30}"
       NODE_COLD_HOURS: "${NODE_COLD_HOURS:-48}"
       SWEEP_INTERVAL_SECONDS: "${SWEEP_INTERVAL_SECONDS:-30}"

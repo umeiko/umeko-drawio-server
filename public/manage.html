@@ -111,7 +111,7 @@
 
   $('loginBtn').onclick = async function () {
     try {
-      var r = await fetch('/manage/login', {
+      var r = await fetch('__BASE__/manage/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: $('user').value, password: $('pass').value }),
@@ -125,13 +125,13 @@
   $('pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('loginBtn').click(); });
 
   $('logout').onclick = async function () {
-    await fetch('/manage/logout', { method: 'POST' });
+    await fetch('__BASE__/manage/logout', { method: 'POST' });
     showLogin();
   };
 
   $('refresh').onclick = function () { load(); };
   $('cleanup').onclick = async function () {
-    var r = await api('/manage/api/cleanup', { method: 'POST' });
+    var r = await api('__BASE__/manage/api/cleanup', { method: 'POST' });
     var j = await r.json();
     alert('清理完成：冻结 ' + j.frozen + ' 个，删除 ' + j.deleted + ' 个');
     load();
@@ -144,7 +144,7 @@
   }
 
   async function load() {
-    var s = await (await api('/manage/api/status')).json();
+    var s = await (await api('__BASE__/manage/api/status')).json();
     var st = s.storage;
     $('status').innerHTML =
       '<div>当前时间</div><div>' + esc(s.now) + '</div>' +
@@ -157,7 +157,7 @@
       upstreamRow('export-server (PNG)', s.upstream.exportServer) +
       upstreamRow('svg-exporter (SVG)', s.upstream.svgExporter);
 
-    var n = await (await api('/manage/api/nodes')).json();
+    var n = await (await api('__BASE__/manage/api/nodes')).json();
     var tb = $('nodes');
     tb.innerHTML = '';
     if (!n.nodes.length) tb.innerHTML = '<tr><td colspan="8" style="color:#666">暂无节点</td></tr>';
@@ -189,21 +189,21 @@
   async function nodeAction(x, a) {
     try {
       if (a === 'xml') {
-        var r = await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/xml');
+        var r = await api('__BASE__/manage/api/nodes/' + encodeURIComponent(x.id) + '/xml');
         if (!r.ok) throw new Error('节点不存在或已过期');
         $('xmlView').style.display = 'block';
         $('xmlNodeId').textContent = x.id;
         $('xmlText').value = await r.text();
         $('xmlView').scrollIntoView({ behavior: 'smooth' });
       } else if (a === 'freeze') {
-        await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/freeze', { method: 'POST' });
+        await api('__BASE__/manage/api/nodes/' + encodeURIComponent(x.id) + '/freeze', { method: 'POST' });
         load();
       } else if (a === 'thaw') {
-        await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/thaw', { method: 'POST' });
+        await api('__BASE__/manage/api/nodes/' + encodeURIComponent(x.id) + '/thaw', { method: 'POST' });
         load();
       } else if (a === 'del') {
         if (!confirm('确认删除节点 ' + x.id + '？该操作不可恢复。')) return;
-        await api('/manage/api/nodes/' + encodeURIComponent(x.id), { method: 'DELETE' });
+        await api('__BASE__/manage/api/nodes/' + encodeURIComponent(x.id), { method: 'DELETE' });
         load();
       }
     } catch (e) {
@@ -212,7 +212,7 @@
   }
 
   // 已登录则直接进面板
-  api('/manage/api/status').then(function () { showPanel(); load(); }).catch(function () {});
+  api('__BASE__/manage/api/status').then(function () { showPanel(); load(); }).catch(function () {});
 })();
 </script>
 </body>

@@ -16,7 +16,21 @@ import { renderDiagram, renderEndpoints } from './render.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const DRAWIO_URL = (process.env.DRAWIO_URL || 'http://localhost:8081').replace(/\/$/, '');
-const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+// 对外基础地址：UMEKO_DRAWIO_SERVER_BASE_URL 显式指定（可含 ALB 路径前缀），否则回退 PUBLIC_BASE_URL
+const PUBLIC_BASE_URL = (
+  process.env.UMEKO_DRAWIO_SERVER_BASE_URL ||
+  process.env.PUBLIC_BASE_URL ||
+  `http://localhost:${PORT}`
+).replace(/\/+$/, '');
+// 从基础地址解析路径前缀（如 https://example.com/drawio -> /drawio），整站挂载到该前缀下
+const BASE_PATH = (() => {
+  try {
+    const p = new URL(PUBLIC_BASE_URL).pathname.replace(/\/+$/, '');
+    return p === '/' ? '' : p;
+  } catch {
+    return '';
+  }
+})();
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(__dirname, '..', 'output');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
 const COLD_DIR = path.join(DATA_DIR, 'cold');
@@ -26,6 +40,7 @@ const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_SECONDS || 30) * 100
 const ADMIN_USER = process.env.ADMIN_USER || 'umeko';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1234';
 const ADMIN_SESSION_MS = 12 * 3600 * 1000;
+const COOKIE_PATH = BASE_PATH || '/';
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -34,6 +49,7 @@ const endpoints = renderEndpoints();
 
 const app = express();
 app.disable('x-powered-by');
+const router = express.Router();
 
 const nodeUrl = (id) => `${PUBLIC_BASE_URL}/node/${id}`;
 const notFound = (res) => res.status(404).json({ ok: false, error: 'node not found or expired' });
@@ -90,6 +106,17 @@ async function checkNode(node, deep) {
   return result;
 }
 
+// 页面模板：__BASE__ 占位符替换为路径前缀，保证 ALB 前缀部署下前端路径正确
+const pageCache = new Map();
+function sendPage(res, name) {
+  let html = pageCache.get(name);
+  if (!html) {
+    html = fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
+    pageCache.set(name, html);
+  }
+  res.type('html').set('Cache-Control', 'no-cache').send(html.split('__BASE__').join(BASE_PATH));
+}
+
 // ---------- 管理员会话 ----------
 
 const adminTokens = new Map(); // token -> expiresAt
@@ -115,9 +142,9 @@ function requireAdmin(req, res, next) {
 
 // ---------- 基础 ----------
 
-app.get('/healthz', (req, res) => res.json({ ok: true }));
+router.get('/healthz', (req, res) => res.json({ ok: true }));
 
-app.get('/api', (req, res) =>
+router.get('/api', (req, res) =>
   res.json({
     name: 'umeko drawio server',
     endpoints: {
@@ -139,14 +166,14 @@ app.get('/api', (req, res) =>
 
 // ---------- 节点 REST API（节点 ID 即访问凭证，无全量列举） ----------
 
-app.use('/api', express.json({ limit: '10mb' }));
+router.use('/api', express.json({ limit: '10mb' }));
 
-app.post('/api/nodes', (req, res) => {
+router.post('/api/nodes', (req, res) => {
   const node = registry.create(String((req.body && req.body.title) || ''));
   res.json({ ok: true, nodeId: node.id, url: nodeUrl(node.id) });
 });
 
-app.get('/api/nodes/:id', (req, res) => {
+router.get('/api/nodes/:id', (req, res) => {
   const n = registry.resolve(req.params.id);
   if (!n) return notFound(res);
   res.json({
@@ -159,12 +186,12 @@ app.get('/api/nodes/:id', (req, res) => {
   });
 });
 
-app.delete('/api/nodes/:id', (req, res) => {
+router.delete('/api/nodes/:id', (req, res) => {
   if (!registry.delete(req.params.id)) return notFound(res);
   res.json({ ok: true });
 });
 
-app.get('/api/nodes/:id/xml', async (req, res) => {
+router.get('/api/nodes/:id/xml', async (req, res) => {
   const n = registry.resolve(req.params.id);
   if (!n) return notFound(res);
   try {
@@ -175,7 +202,7 @@ app.get('/api/nodes/:id/xml', async (req, res) => {
   }
 });
 
-app.put('/api/nodes/:id/xml', express.text({ type: () => true, limit: '25mb' }), (req, res) => {
+router.put('/api/nodes/:id/xml', express.text({ type: () => true, limit: '25mb' }), (req, res) => {
   const n = registry.resolve(req.params.id);
   if (!n) return notFound(res);
   const xml = String(req.body || '');
@@ -190,21 +217,21 @@ app.put('/api/nodes/:id/xml', express.text({ type: () => true, limit: '25mb' }),
   });
 });
 
-app.get('/api/nodes/:id/errors', async (req, res) => {
+router.get('/api/nodes/:id/errors', async (req, res) => {
   const n = registry.resolve(req.params.id);
   if (!n) return notFound(res);
   const deep = req.query.deep === '1' || req.query.deep === 'true';
   res.json(await checkNode(n, deep));
 });
 
-app.post('/api/validate', async (req, res) => {
+router.post('/api/validate', async (req, res) => {
   const xml = String((req.body && req.body.xml) ?? '');
   res.json(await validateDeep(xml, !!(req.body && req.body.deep)));
 });
 
 // ---------- XML -> PNG/SVG 渲染服务 ----------
 
-app.post('/render', express.json({ limit: '25mb' }), async (req, res) => {
+router.post('/render', express.json({ limit: '25mb' }), async (req, res) => {
   const { xml, format = 'svg', scale, background } = req.body || {};
   const fmt = String(format).toLowerCase();
   if (!['png', 'svg'].includes(fmt)) {
@@ -225,39 +252,39 @@ app.post('/render', express.json({ limit: '25mb' }), async (req, res) => {
 
 // ---------- 节点页与入口页 ----------
 
-app.get('/node', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'index.html')));
+router.get('/node', (req, res) => sendPage(res, 'index.html'));
 
-app.get('/node/:id', (req, res) => {
+router.get('/node/:id', (req, res) => {
   if (!registry.resolve(req.params.id)) return res.status(404).send('node not found or expired');
-  res.sendFile(path.join(__dirname, '..', 'public', 'node.html'));
+  sendPage(res, 'node.html');
 });
 
 // ---------- 管理面板 ----------
 
-app.get('/manage', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'manage.html')));
+router.get('/manage', (req, res) => sendPage(res, 'manage.html'));
 
-app.post('/manage/login', express.json(), (req, res) => {
+router.post('/manage/login', express.json(), (req, res) => {
   const { user, password } = req.body || {};
   if (user === ADMIN_USER && password === ADMIN_PASSWORD) {
     const token = randomBytes(24).toString('base64url');
     adminTokens.set(token, Date.now() + ADMIN_SESSION_MS);
     res.setHeader(
       'Set-Cookie',
-      `umeko_admin=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${ADMIN_SESSION_MS / 1000}`,
+      `umeko_admin=${token}; HttpOnly; Path=${COOKIE_PATH}; SameSite=Lax; Max-Age=${ADMIN_SESSION_MS / 1000}`,
     );
     return res.json({ ok: true });
   }
   res.status(401).json({ ok: false, error: '账号或密码错误' });
 });
 
-app.post('/manage/logout', (req, res) => {
+router.post('/manage/logout', (req, res) => {
   const t = parseCookies(req).umeko_admin;
   if (t) adminTokens.delete(t);
-  res.setHeader('Set-Cookie', 'umeko_admin=; HttpOnly; Path=/; Max-Age=0');
+  res.setHeader('Set-Cookie', `umeko_admin=; HttpOnly; Path=${COOKIE_PATH}; Max-Age=0`);
   res.json({ ok: true });
 });
 
-app.get('/manage/api/status', requireAdmin, async (req, res) => {
+router.get('/manage/api/status', requireAdmin, async (req, res) => {
   const [outputBytes, coldBytes, drawio, raster, svg] = await Promise.all([
     dirSize(OUTPUT_DIR),
     dirSize(COLD_DIR),
@@ -276,6 +303,7 @@ app.get('/manage/api/status', requireAdmin, async (req, res) => {
       coldTtlHours: COLD_TTL_MS / 3600000,
       sweepIntervalSec: SWEEP_INTERVAL_MS / 1000,
       publicBaseUrl: PUBLIC_BASE_URL,
+      basePath: BASE_PATH,
     },
     counts: {
       hot: nodes.filter((n) => n.state === 'hot').length,
@@ -291,11 +319,11 @@ app.get('/manage/api/status', requireAdmin, async (req, res) => {
   });
 });
 
-app.get('/manage/api/nodes', requireAdmin, (req, res) =>
+router.get('/manage/api/nodes', requireAdmin, (req, res) =>
   res.json({ ok: true, nodes: registry.list().map((n) => ({ ...n, url: nodeUrl(n.id) })) }),
 );
 
-app.get('/manage/api/nodes/:id/xml', requireAdmin, async (req, res) => {
+router.get('/manage/api/nodes/:id/xml', requireAdmin, async (req, res) => {
   const n = registry.get(req.params.id);
   if (n) {
     try {
@@ -310,23 +338,23 @@ app.get('/manage/api/nodes/:id/xml', requireAdmin, async (req, res) => {
   notFound(res);
 });
 
-app.post('/manage/api/nodes/:id/freeze', requireAdmin, (req, res) => {
+router.post('/manage/api/nodes/:id/freeze', requireAdmin, (req, res) => {
   if (!registry.freeze(req.params.id)) return notFound(res);
   res.json({ ok: true });
 });
 
-app.post('/manage/api/nodes/:id/thaw', requireAdmin, (req, res) => {
+router.post('/manage/api/nodes/:id/thaw', requireAdmin, (req, res) => {
   const n = registry.thaw(req.params.id);
   if (!n) return notFound(res);
   res.json({ ok: true });
 });
 
-app.delete('/manage/api/nodes/:id', requireAdmin, (req, res) => {
+router.delete('/manage/api/nodes/:id', requireAdmin, (req, res) => {
   if (!registry.delete(req.params.id)) return notFound(res);
   res.json({ ok: true });
 });
 
-app.post('/manage/api/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...registry.sweep() }));
+router.post('/manage/api/cleanup', requireAdmin, (req, res) => res.json({ ok: true, ...registry.sweep() }));
 
 // ---------- MCP (Streamable HTTP)：/mcp 用户态，/mcp-dev 开发态 ----------
 
@@ -505,7 +533,7 @@ function createMcpServer(mode) {
 function mountMcp(mountPath, mcpServer) {
   const transports = Object.create(null);
 
-  app.post(mountPath, express.json({ limit: '10mb' }), async (req, res) => {
+  router.post(mountPath, express.json({ limit: '10mb' }), async (req, res) => {
     try {
       const sid = req.headers['mcp-session-id'];
       let transport = sid ? transports[sid] : undefined;
@@ -536,8 +564,8 @@ function mountMcp(mountPath, mcpServer) {
     if (!t) return res.status(404).json({ error: 'unknown session' });
     await t.handleRequest(req, res);
   };
-  app.get(mountPath, sessionHandler);
-  app.delete(mountPath, sessionHandler);
+  router.get(mountPath, sessionHandler);
+  router.delete(mountPath, sessionHandler);
 }
 
 mountMcp('/mcp', createMcpServer('user'));
@@ -545,7 +573,7 @@ mountMcp('/mcp-dev', createMcpServer('dev'));
 
 // ---------- draw.io 原生编辑器（反向代理到 drawio 容器，挂在根路径） ----------
 
-app.use(
+router.use(
   createProxyMiddleware({
     target: DRAWIO_URL,
     changeOrigin: true,
@@ -563,10 +591,24 @@ app.use(
   }),
 );
 
+// ---------- 挂载（支持 ALB 路径前缀） ----------
+
+app.get('/healthz', (req, res) => res.json({ ok: true })); // 根级健康检查，供 ALB  target 健康探测
+if (BASE_PATH) {
+  app.get('/', (req, res) => res.redirect(`${BASE_PATH}/`));
+  // 非严格模式下 '/drawio' 也匹配 '/drawio/'，需显式判断避免自重定向循环
+  app.get(BASE_PATH, (req, res, next) => {
+    if (req.path !== BASE_PATH) return next();
+    res.redirect(`${BASE_PATH}/`);
+  });
+}
+app.use(BASE_PATH || '/', router);
+
 // ---------- HTTP + WebSocket ----------
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true });
+const WS_PATH = `${BASE_PATH}/ws`;
 
 server.on('upgrade', (req, socket, head) => {
   let u;
@@ -576,7 +618,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (u.pathname !== '/ws') {
+  if (u.pathname !== WS_PATH) {
     socket.destroy();
     return;
   }
@@ -598,7 +640,8 @@ setInterval(() => {
 
 server.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);
-  console.log(`[server] draw.io editor proxied at / -> ${DRAWIO_URL}`);
+  console.log(`[server] public base: ${PUBLIC_BASE_URL}${BASE_PATH ? ` (path prefix: ${BASE_PATH})` : ''}`);
+  console.log(`[server] draw.io editor proxied at ${BASE_PATH || ''}/ -> ${DRAWIO_URL}`);
   console.log(`[server] MCP user endpoint: ${PUBLIC_BASE_URL}/mcp | dev endpoint: ${PUBLIC_BASE_URL}/mcp-dev`);
   console.log(`[server] lifecycle: hot ${HOT_TTL_MS / 60000}min -> cold ${COLD_TTL_MS / 3600000}h -> delete`);
 });

@@ -63,7 +63,7 @@
   var mainEl = $('main'), leftEl = $('left'), splitter = $('splitter'), expandStrip = $('expandStrip');
 
   $('nid').textContent = nodeId;
-  iframe.src = '/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
+  iframe.src = '__BASE__/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
 
   var currentXml = EMPTY_XML;
   var editorReady = false;
@@ -182,7 +182,7 @@
   // ---------- 与服务器通信（WebSocket 通道） ----------
 
   function connectWs() {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws?node=' + encodeURIComponent(nodeId));
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '__BASE__/ws?node=' + encodeURIComponent(nodeId));
     ws.onopen = function () { setDot($('wsDot'), true); };
     ws.onclose = function () { setDot($('wsDot'), false); setTimeout(connectWs, 1500); };
     ws.onerror = function () {};
@@ -218,7 +218,7 @@
   };
   $('btnCheck').onclick = async function () {
     try {
-      var r = await fetch('/api/validate', {
+      var r = await fetch('__BASE__/api/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ xml: src.value }),
@@ -237,7 +237,7 @@
       localStorage.setItem('node.history', JSON.stringify(h.slice(0, 20)));
     } catch (e) {}
     try {
-      var r = await fetch('/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
+      var r = await fetch('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
       if (r.ok) {
         var t = await r.text();
         if (t && t.trim()) currentXml = t;

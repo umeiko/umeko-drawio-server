@@ -19,25 +19,35 @@
   button:hover { background: #3182ce; }
   button.ghost { background: #3a4150; }
   button.ghost:hover { background: #495163; }
-  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
   .hint { color: #9aa3b2; font-size: 12px; margin-top: 10px; }
   .err { color: #ff8a80; font-size: 12px; margin-top: 8px; }
   #created { display: none; }
   #created .nid { font: 18px Consolas, monospace; color: #a5d6a7; letter-spacing: 1px; }
-  #created a { color: #8ab4f8; }
+  a.btnlink { text-decoration: none; }
+  a.btnlink button { width: 100%; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   td { padding: 6px 4px; border-bottom: 1px solid #2c313c; }
-  td.id { font-family: Consolas, monospace; color: #a5d6a7; }
-  td a { color: #8ab4f8; text-decoration: none; }
-  td a:hover { text-decoration: underline; }
+  td.id a.idlink { font-family: Consolas, monospace; color: #a5d6a7; text-decoration: none; cursor: pointer; }
+  td.id a.idlink:hover { text-decoration: underline; }
+  td a.tab { color: #8ab4f8; text-decoration: none; margin-left: 6px; }
   td .del { color: #ff8a80; cursor: pointer; }
   .empty { color: #666; font-size: 12px; }
+  /* 内嵌画布视图：全屏覆盖，地址栏链接保持不变 */
+  #viewer { position: fixed; inset: 0; z-index: 50; display: none; flex-direction: column; background: #14161a; }
+  #vbar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; background: #1d2027; border-bottom: 1px solid #2c313c; flex: none; font-size: 12px; flex-wrap: wrap; }
+  #vbar .vid { font-family: Consolas, monospace; color: #a5d6a7; }
+  #vbar button { padding: 4px 12px; font-size: 12px; }
+  #vbar a { color: #8ab4f8; text-decoration: none; }
+  #vbar a:hover { text-decoration: underline; }
+  #vbar .spacer { flex: 1; }
+  #vframe { flex: 1; border: 0; background: #fff; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>draw.io 节点入口</h1>
-  <div class="sub">每个节点是一块独立画布：左侧 XML 源码，右侧完整 draw.io 编辑器。空闲 30 分钟自动转冷存储，冷存储保留 48 小时。</div>
+  <div class="sub">每个节点是一块独立画布：左侧 XML 源码，右侧完整 draw.io 编辑器。空闲 30 分钟自动转冷存储，冷存储保留 48 小时。「进入画布」在当前页内嵌打开，不改变地址栏链接。</div>
 
   <div class="card">
     <h2>进入已有画布</h2>
@@ -54,9 +64,10 @@
       <div class="hint">节点 ID（把它交给你的 agent，配合 MCP 地址 <span id="mcpUrl"></span> 继续工作）：</div>
       <div class="nid" id="newId"></div>
       <div class="row">
+        <button id="openInline">打开画布</button>
+        <a id="openNew" class="btnlink" href="#" target="_blank" rel="noopener"><button class="ghost">新标签页打开</button></a>
         <button class="ghost" id="copyId">复制 ID</button>
         <button class="ghost" id="copyUrl">复制链接</button>
-        <a id="openNew" href="#" target="_blank"><button>打开画布</button></a>
       </div>
     </div>
   </div>
@@ -67,10 +78,46 @@
     <div class="empty" id="histEmpty">暂无记录</div>
   </div>
 </div>
+
+<div id="viewer">
+  <div id="vbar">
+    <button class="ghost" id="vBack">← 返回</button>
+    <span>节点 <span class="vid" id="vId"></span></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="vCopy">复制链接</button>
+    <a id="vTab" href="#" target="_blank" rel="noopener">新标签页打开 ↗</a>
+  </div>
+  <iframe id="vframe" title="draw.io 画布"></iframe>
+</div>
+
 <script>
 (function () {
+  var BASE = '__BASE__'; // ALB 前缀部署时由服务端注入（如 /drawio），默认空串
   var $ = function (id) { return document.getElementById(id); };
-  $('mcpUrl').textContent = location.origin + '/mcp';
+  $('mcpUrl').textContent = location.origin + BASE + '/mcp';
+
+  function nodePath(id) { return BASE + '/node/' + encodeURIComponent(id); }
+  function absUrl(id) { return location.origin + nodePath(id); }
+
+  // ---------- 内嵌画布视图（不改变地址栏链接） ----------
+
+  function openInline(id, url) {
+    $('vframe').src = nodePath(id);
+    $('vId').textContent = id;
+    $('vTab').href = url || absUrl(id);
+    $('viewer').style.display = 'flex';
+  }
+  function closeViewer() {
+    $('viewer').style.display = 'none';
+    $('vframe').src = 'about:blank';
+  }
+  $('vBack').onclick = closeViewer;
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && $('viewer').style.display === 'flex') closeViewer();
+  });
+  $('vCopy').onclick = function () { navigator.clipboard.writeText($('vTab').href); };
+
+  // ---------- 最近使用 ----------
 
   function history() {
     try { return JSON.parse(localStorage.getItem('node.history') || '[]'); } catch (e) { return []; }
@@ -88,36 +135,49 @@
     var h = history();
     var tb = $('history').querySelector('tbody');
     tb.innerHTML = '';
-    $('histEmpty').style.display = h.length ? 'none' : '';
+    $('histEmpty').style.display = h.length ? 'none' : 'block';
     h.forEach(function (x) {
       var tr = document.createElement('tr');
       var when = '';
       try { when = new Date(x.at).toLocaleString(); } catch (e) {}
-      tr.innerHTML = '<td class="id"><a href="/node/' + encodeURIComponent(x.id) + '">' + x.id + '</a></td>' +
+      tr.innerHTML = '<td class="id"><a class="idlink">' + x.id + '</a>' +
+        '<a class="tab" target="_blank" rel="noopener" title="新标签页打开">↗</a></td>' +
         '<td></td><td style="color:#9aa3b2">' + when + '</td>' +
         '<td style="width:30px;text-align:right"><span class="del" title="从列表移除">✕</span></td>';
       tr.children[1].textContent = x.title || '';
+      tr.querySelector('.tab').href = absUrl(x.id);
+      tr.querySelector('.idlink').onclick = function () { pushHistory(x.id, x.title); openInline(x.id); };
       tr.querySelector('.del').onclick = function () {
         saveHistory(history().filter(function (y) { return y.id !== x.id; }));
         renderHistory();
       };
-      tr.querySelector('a').addEventListener('click', function () { pushHistory(x.id, x.title); });
       tb.appendChild(tr);
     });
   }
 
-  $('go').onclick = function () {
+  // ---------- 进入已有画布（先校验存在，再内嵌打开） ----------
+
+  $('go').onclick = async function () {
     var id = $('nid').value.trim();
     if (!id) { $('goErr').textContent = '请输入节点 ID'; return; }
     $('goErr').textContent = '';
-    pushHistory(id, '');
-    location.href = '/node/' + encodeURIComponent(id);
+    try {
+      var r = await fetch(BASE + '/api/nodes/' + encodeURIComponent(id));
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.error || '节点不存在或已过期');
+      pushHistory(id, j.title || '');
+      openInline(id, j.url);
+    } catch (e) {
+      $('goErr').textContent = String(e.message || e);
+    }
   };
   $('nid').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('go').click(); });
 
+  // ---------- 申请新节点 ----------
+
   $('create').onclick = async function () {
     try {
-      var r = await fetch('/api/nodes', {
+      var r = await fetch(BASE + '/api/nodes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: $('title').value.trim() }),
@@ -128,6 +188,7 @@
       $('newId').textContent = j.nodeId;
       $('openNew').href = j.url;
       pushHistory(j.nodeId, $('title').value.trim());
+      $('openInline').onclick = function () { openInline(j.nodeId, j.url); };
       $('copyId').onclick = function () { navigator.clipboard.writeText(j.nodeId); };
       $('copyUrl').onclick = function () { navigator.clipboard.writeText(j.url); };
     } catch (e) {
