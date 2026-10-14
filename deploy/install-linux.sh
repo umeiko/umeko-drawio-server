@@ -22,16 +22,29 @@ command -v apt-get >/dev/null || die "仅支持 Debian/Ubuntu（需要 apt-get�
 # ---------- 1. 系统依赖 ----------
 say "安装系统依赖（OpenJDK 17 / Chromium / 中文字体 ...）"
 export DEBIAN_FRONTEND=noninteractive
+
+# apt 下载可能因网络抖动失败，统一重试 3 次
+apt_retry() {
+  local n=0
+  until apt-get install -y -qq "$@"; do
+    n=$((n + 1))
+    [ "$n" -ge 3 ] && return 1
+    say "apt 安装失败，重试第 $n 次: $*"
+    apt-get update -qq || true
+    sleep 3
+  done
+}
+
 apt-get update -qq
-apt-get install -y -qq openjdk-17-jre-headless curl unzip fontconfig fonts-noto-cjk ca-certificates gnupg
+apt_retry openjdk-17-jre-headless curl unzip fontconfig fonts-noto-cjk ca-certificates gnupg
 
 if [ -z "${CHROME_BIN:-}" ]; then
-  if apt-get install -y -qq chromium 2>/dev/null; then
+  if apt_retry chromium; then
     CHROME_BIN="$(command -v chromium)"
-  elif apt-get install -y -qq chromium-browser 2>/dev/null && command -v chromium-browser >/dev/null; then
+  elif apt_retry chromium-browser && command -v chromium-browser >/dev/null; then
     CHROME_BIN="$(command -v chromium-browser)"
   else
-    die "未能安装 Chromium。Ubuntu 服务器版 chromium-browser 可能转向 snap；请手动安装 Chrome/Chromium 后用 CHROME_BIN=/path/to/chrome 重跑"
+    die "未能安装 Chromium（可能是网络问题，可重跑重试）。也可手动安装 Chrome/Chromium 后用 CHROME_BIN=/path/to/chrome 重跑"
   fi
 fi
 say "Chromium: $CHROME_BIN"
@@ -49,12 +62,18 @@ say "下载 Tomcat $TOMCAT_VERSION 与 draw.war $DRAWIO_VERSION"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 if [ ! -d "tomcat" ]; then
-  curl -fSL "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" -o tomcat.tgz
+  curl -fSL --retry 3 --retry-all-errors "https://archive.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz" -o tomcat.tgz
   mkdir -p tomcat && tar -xzf tomcat.tgz -C tomcat --strip-components=1 && rm tomcat.tgz
 fi
-if [ ! -f "tomcat/webapps/draw.war" ] && [ ! -d "tomcat/webapps/draw" ]; then
-  curl -fSL "https://github.com/jgraph/drawio/releases/download/${DRAWIO_VERSION}/draw.war" -o tomcat/webapps/draw.war
+# drawio webapp 部署在根路径（去掉 Tomcat 自带的 ROOT 欢迎页与示例应用）
+if [ -d "tomcat/webapps/draw" ] && [ ! -f "tomcat/webapps/ROOT.war" ]; then
+  rm -rf tomcat/webapps/draw tomcat/webapps/ROOT
+  mv tomcat/webapps/draw.war tomcat/webapps/ROOT.war
 fi
+if [ ! -f "tomcat/webapps/ROOT.war" ]; then
+  curl -fSL --retry 3 --retry-all-errors "https://github.com/jgraph/drawio/releases/download/${DRAWIO_VERSION}/draw.war" -o tomcat/webapps/ROOT.war
+fi
+rm -rf tomcat/webapps/ROOT tomcat/webapps/docs tomcat/webapps/examples tomcat/webapps/host-manager tomcat/webapps/manager
 
 # ---------- 4. 主服务与导出器 ----------
 say "安装主服务与导出器到 $INSTALL_DIR"
@@ -79,15 +98,15 @@ export PUPPETEER_EXECUTABLE_PATH="$CHROME_BIN"
 export PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
 pids=""
-tomcat/bin/catalina.sh run >> logs/tomcat.log 2>&1 & pids="\$pids \$!"
+tomcat/bin/catalina.sh run >> "$INSTALL_DIR/logs/tomcat.log" 2>&1 & pids="\$pids \$!"
 
 # 等 webapp 就绪
 for _ in \$(seq 1 120); do
-  curl -fsS -o /dev/null http://127.0.0.1:8080/ 2>/dev/null && break
+  curl -fsS -o /dev/null http://127.0.0.1:8080/index.html 2>/dev/null && break
   sleep 1
 done
 
-( cd exporter && PORT=8001 DRAWIO_URL=http://127.0.0.1:8080 exec node svg-export.js ) >> logs/exporter.log 2>&1 & pids="\$pids \$!"
+( cd exporter && PORT=8001 DRAWIO_URL=http://127.0.0.1:8080 exec node svg-export.js ) >> "$INSTALL_DIR/logs/exporter.log" 2>&1 & pids="\$pids \$!"
 
 cd "$INSTALL_DIR/app"
 PORT=$PORT \\
@@ -97,9 +116,10 @@ SVG_EXPORT_URLS=http://127.0.0.1:8001/ \\
 OUTPUT_DIR=$INSTALL_DIR/output \\
 DATA_DIR=$INSTALL_DIR/data \\
 PUBLIC_BASE_URL=\${PUBLIC_BASE_URL:-http://localhost:$PORT} \\
-node src/server.js >> logs/server.log 2>&1 &
+node src/server.js >> "$INSTALL_DIR/logs/server.log" 2>&1 &
 SERVER_PID=\$!; pids="\$pids \$SERVER_PID"
 
+echo \$pids > "$INSTALL_DIR/run.pids"
 echo "[start] 全部组件已启动，日志见 $INSTALL_DIR/logs/"
 trap 'kill \$pids 2>/dev/null' TERM INT
 wait "\$SERVER_PID"
@@ -107,12 +127,16 @@ kill \$pids 2>/dev/null || true
 EOF
 chmod +x start.sh
 
-cat > stop.sh <<'EOF'
+cat > stop.sh <<EOF
 #!/usr/bin/env bash
-# 停止全部组件
-pkill -f 'umeko-drawio.*src/server.js' 2>/dev/null || true
+# 停止全部组件（优先用 start.sh 记录的 pid，其次按特征匹配）
+if [ -f "$INSTALL_DIR/run.pids" ]; then
+  kill \$(cat "$INSTALL_DIR/run.pids") 2>/dev/null || true
+  rm -f "$INSTALL_DIR/run.pids"
+fi
+pkill -f 'node src/server.js' 2>/dev/null || true
 pkill -f 'svg-export.js' 2>/dev/null || true
-pkill -f 'catalina' 2>/dev/null || true
+pkill -f 'catalina.base=$INSTALL_DIR' 2>/dev/null || true
 echo "[stop] 已发送停止信号"
 EOF
 chmod +x stop.sh
