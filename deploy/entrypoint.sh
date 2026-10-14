@@ -14,10 +14,24 @@ if [ -z "${JRE_HOME:-}" ]; then
 fi
 
 # 自定义字体（可选挂载 /usr/share/fonts/drawio）
+FONT_TTF=FZLanTingHeiS-R-GB.ttf
+FONT_URL=${FONT_URL:-https://github.com/umeiko/UmEkO/releases/download/assets/FZLanTingHeiS-R-GB.ttf}
+# 构建时未带入字体则启动时尝试补下载（内网离线可挂载 /app/fonts 覆盖）
+if [ ! -s "/app/fonts/$FONT_TTF" ]; then
+  curl -fSL --retry 3 --retry-all-errors --connect-timeout 10 "$FONT_URL" -o "/app/fonts/$FONT_TTF" 2>/dev/null \
+    && log "font downloaded: $FONT_TTF" || log "WARN: 字体下载失败（离线环境可挂载 /app/fonts），方正兰亭黑不可用"
+fi
+# 字体文件分发：fontconfig（服务端渲染兜底）+ webapp（导出器 Chrome 直连加载 webfont）
+for d in /usr/share/fonts/drawio "$CATALINA_HOME/webapps/draw/fonts"; do
+  mkdir -p "$d"
+  [ -s "/app/fonts/$FONT_TTF" ] && cp -n "/app/fonts/$FONT_TTF" "$d/" 2>/dev/null || true
+done
 if ls /usr/share/fonts/drawio/* >/dev/null 2>&1; then
   fc-cache -f >/dev/null 2>&1 || true
   log "custom fonts cached"
 fi
+# 向 webapp 注入 DRAWIO_CONFIG（注册自定义字体到编辑器字体菜单）
+bash /app/deploy/patch-preconfig.sh "$CATALINA_HOME/webapps/draw" /app/deploy/drawio-config.json || true
 
 pids=""
 start() { # start <name> <cmd...>

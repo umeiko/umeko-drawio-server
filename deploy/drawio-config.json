@@ -1,0 +1,12 @@
+{
+  "customFonts": [
+    {
+      "fontFamily": "方正兰亭黑简体",
+      "fontUrl": "fonts/FZLanTingHeiS-R-GB.ttf"
+    },
+    {
+      "fontFamily": "FZLanTingHeiS-R-GB",
+      "fontUrl": "fonts/FZLanTingHeiS-R-GB.ttf"
+    }
+  ]
+}

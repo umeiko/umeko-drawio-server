@@ -33,6 +33,8 @@ const BASE_PATH = (() => {
 })();
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(__dirname, '..', 'output');
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+// 自定义字体目录（方正兰亭黑等，deploy/get-fonts.sh 下载，不入 git）
+const FONTS_DIR = process.env.FONTS_DIR || path.join(__dirname, '..', 'fonts');
 const COLD_DIR = path.join(DATA_DIR, 'cold');
 const HOT_TTL_MS = Number(process.env.NODE_HOT_MINUTES || 30) * 60 * 1000;
 const COLD_TTL_MS = Number(process.env.NODE_COLD_HOURS || 48) * 3600 * 1000;
@@ -606,6 +608,8 @@ mountMcp('/mcp-dev', createMcpServer('dev'));
 
 // 渲染产物直出：<base>/output/<file> 可直接下载
 router.use('/output', express.static(OUTPUT_DIR, { index: false }));
+// 自定义字体直出（编辑器 customFonts 的 fontUrl 指向此处；长缓存，字体内容不变）
+router.use('/fonts', express.static(FONTS_DIR, { index: false, maxAge: '30d', immutable: true }));
 // 前端页面静态直出（/node.html、/manage.html 等）；index:false 避免覆盖根路径的编辑器代理
 router.use(express.static(PUBLIC_DIR, { index: false }));
 

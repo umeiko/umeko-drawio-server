@@ -35,6 +35,7 @@
 ### A. Docker Compose（推荐，分容器）
 
 ```bash
+bash deploy/get-fonts.sh   # 下载方正兰亭黑字体（授权资产不入 git，见「自定义字体」一节）
 docker compose up -d --build
 ```
 
@@ -213,11 +214,33 @@ NODE_TRANSPORT=sse docker compose up -d
 - SSE 流带 25 秒心跳（低于 ALB 默认 60s 空闲超时）和 `X-Accel-Buffering: no` 反缓冲头；
 - 两种传输功能完全一致（推送 XML、实时取回、在线状态），管理面板「页面在线」列会显示当前传输方式（WS/SSE）。
 
+## 自定义字体（方正兰亭黑）
+
+项目内置接入**方正兰亭黑简体**（公司正式授权字体）。字体文件是授权资产，**不入 git 仓库**，由各部署形态在部署时拉取或本地放入：
+
+```bash
+bash deploy/get-fonts.sh   # 下载到 fonts/FZLanTingHeiS-R-GB.ttf（幂等；离线环境手动放文件到 fonts/ 即可）
+```
+
+接入效果（三种部署形态一致）：
+
+- 编辑器字体菜单出现「方正兰亭黑简体」；XML 里写 `fontFamily=方正兰亭黑简体` 或 `fontFamily=FZLanTingHeiS-R-GB` 均可；
+- 浏览器侧通过 webfont 加载（编辑器 `DRAWIO_CONFIG.customFonts` 注册，字体经主服务 `/fonts/` 直出）；
+- PNG/SVG 导出侧：导出器的无头 Chrome 既加载 webfont，也把 ttf 装进了 fontconfig 兜底，服务端渲染不缺字形。
+
+各形态的具体接线：
+
+- **compose**：`docker-compose.yml` 给 drawio 容器传 `DRAWIO_CONFIG`（镜像 entrypoint 原生支持，写入 PreConfig.js），并把 `./fonts` 挂载进 webapp、export-server、svg-exporter 与主服务；
+- **all-in-one**：构建时 `COPY fonts/` 进镜像；构建时没下载的话，容器启动时会尝试在线补下载（内网离线可 `-v "$PWD/fonts:/app/fonts"` 挂载覆盖）；`entrypoint.sh` 负责 `fc-cache` 和向 PreConfig.js 注入配置；
+- **裸机**：`install-linux.sh` 自动调 `get-fonts.sh`，装入 `/usr/share/fonts/drawio` 并 `fc-cache`，每次启动时同步到 webapp 目录并注入 `DRAWIO_CONFIG`。
+
+要换成其它字体：替换 `fonts/` 下的文件并修改 `deploy/drawio-config.json` 里的 `fontFamily`/`fontUrl`（compose 还需同步改 yml 里的 `DRAWIO_CONFIG`）。
+
 ## 注意事项
 
 - **安全**：`/mcp` 用户态不暴露节点列举，但知道 nodeId 即可操作对应节点——节点 ID 即凭证，勿泄露；`/mcp-dev` 与 `/manage` 仅应在内网/受信环境开放；生产部署务必修改 `ADMIN_PASSWORD`。
 - **持久化**：热节点在内存中，**server 重启即丢失**；已冻结的冷节点以 XML 文件存于 `./data/cold/`（已挂载宿主机），重启后可解冻恢复。
 - 推送/校验的 XML 支持 `<mxfile>`（可含多个 `<diagram>`）或裸 `<mxGraphModel>`，非压缩格式可做完整结构校验，压缩内容仅做语法校验。
 - PNG/JPG 默认由官方 `jgraph/export-server` 渲染（compose / all-in-one）；`exporter/` 下自研脚本（embed 协议无头导出）渲染 SVG，同时**也支持 PNG/JPG**——裸机 Linux 模式下用它渲染全部格式，可不依赖官方导出服务。
-- PNG 导出如需额外字体（如特定中文字体），放入 `./fonts` 目录即可（挂载到导出服务的 `/usr/share/fonts/drawio`；裸机模式已装 `fonts-noto-cjk`）。
+- PNG 导出如需额外字体（如特定中文字体），放入 `./fonts` 目录即可（挂载到导出服务的 `/usr/share/fonts/drawio`；裸机模式已装 `fonts-noto-cjk`）。方正兰亭黑已内置接入，见「自定义字体」一节。
 - 渲染产物写入 `./output`（挂载到宿主机），可直接通过 `http://localhost:3000/output/<文件名>` 下载；MCP `render_diagram` 返回结果中带 `url` 字段。产物需自行定期清理；冷存储由生命周期自动清理。

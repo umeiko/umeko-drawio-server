@@ -23,6 +23,13 @@ COPY public ./public
 # svg-exporter 脚本并入 export-server 应用目录（复用其 Chrome + puppeteer 依赖）
 COPY exporter/svg-export.js /home/pptruser/draw-image-export2/svg-export.js
 
+# 自定义字体（方正兰亭黑）：构建前执行 deploy/get-fonts.sh 下载；
+# 若构建时缺失，entrypoint 会在容器启动时尝试在线补下载
+COPY fonts/ /app/fonts/
+COPY fonts/ /usr/share/fonts/drawio/
+COPY fonts/ /usr/local/tomcat/webapps/draw/fonts/
+COPY deploy/drawio-config.json deploy/patch-preconfig.sh /app/deploy/
+
 COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /app/output /app/data /usr/share/fonts/drawio
 

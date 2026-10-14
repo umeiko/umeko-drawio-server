@@ -7,6 +7,13 @@ services:
     environment:
       # webapp 的 /export 及 PDF 导出都转发到独立的导出服务
       EXPORT_URL: http://export-server:8000/
+      # 注册自定义字体（方正兰亭黑）。镜像 entrypoint 会把该 JSON 写入 PreConfig.js；
+      # fontUrl 为相对路径：浏览器经 server 代理访问时由 server 的 /fonts 直出，
+      # 导出器的无头 Chrome 直连本容器时由下面的 webapp fonts 目录挂载提供
+      DRAWIO_CONFIG: '{"customFonts":[{"fontFamily":"方正兰亭黑简体","fontUrl":"fonts/FZLanTingHeiS-R-GB.ttf"},{"fontFamily":"FZLanTingHeiS-R-GB","fontUrl":"fonts/FZLanTingHeiS-R-GB.ttf"}]}'
+    volumes:
+      # 字体文件需先执行 deploy/get-fonts.sh 下载（授权资产不入 git）
+      - ./fonts:/usr/local/tomcat/webapps/draw/fonts:ro
     ports:
       # 调试用直达端口（生产访问走 server 的 3000 代理）
       - "127.0.0.1:8081:8080"
@@ -35,6 +42,9 @@ services:
       DRAWIO_URL: http://drawio:8080
     expose:
       - "8001"
+    volumes:
+      # 字体目录（fontconfig 兜底，保证服务端渲染不缺字形）
+      - ./fonts:/usr/share/fonts/drawio:ro
     depends_on:
       - drawio
     networks: [drawnet]
@@ -62,6 +72,8 @@ services:
     volumes:
       - ./output:/app/output
       - ./data:/app/data
+      # 自定义字体直出（/fonts，供经代理访问编辑器的浏览器加载 webfont）
+      - ./fonts:/app/fonts:ro
     depends_on:
       - drawio
       - export-server

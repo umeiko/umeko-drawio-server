@@ -75,6 +75,23 @@ if [ ! -f "tomcat/webapps/ROOT.war" ]; then
 fi
 rm -rf tomcat/webapps/ROOT tomcat/webapps/docs tomcat/webapps/examples tomcat/webapps/host-manager tomcat/webapps/manager
 
+# ---------- 3.5 自定义字体（方正兰亭黑，公司授权资产，不入 git） ----------
+say "准备方正兰亭黑字体"
+if ! bash "$REPO_ROOT/deploy/get-fonts.sh"; then
+  echo "[install] WARN: 字体下载失败（离线环境可手动把 FZLanTingHeiS-R-GB.ttf 放入 fonts/ 后重跑）" >&2
+fi
+# 主服务默认 FONTS_DIR=<app>/../fonts 即 $INSTALL_DIR/app/fonts（server.js 位于 app/src 下）
+mkdir -p "$INSTALL_DIR/app/fonts"
+cp "$REPO_ROOT/fonts/"*.ttf "$INSTALL_DIR/app/fonts/" 2>/dev/null || true
+if ls "$INSTALL_DIR/app/fonts/"*.ttf >/dev/null 2>&1; then
+  mkdir -p /usr/share/fonts/drawio
+  cp "$INSTALL_DIR/app/fonts/"*.ttf /usr/share/fonts/drawio/
+  fc-cache -f >/dev/null 2>&1 || true
+  say "字体已安装到 fontconfig: $(ls "$INSTALL_DIR/app/fonts/"*.ttf | xargs -n1 basename | tr '\n' ' ')"
+fi
+mkdir -p "$INSTALL_DIR/deploy"
+cp "$REPO_ROOT/deploy/drawio-config.json" "$REPO_ROOT/deploy/patch-preconfig.sh" "$INSTALL_DIR/deploy/"
+
 # ---------- 4. 主服务与导出器 ----------
 say "安装主服务与导出器到 $INSTALL_DIR"
 mkdir -p app exporter data output logs
@@ -105,6 +122,11 @@ for _ in \$(seq 1 120); do
   curl -fsS -o /dev/null http://127.0.0.1:8080/index.html 2>/dev/null && break
   sleep 1
 done
+
+# webapp 就绪后（ROOT.war 已解压）注入自定义字体：webfont 文件 + DRAWIO_CONFIG
+mkdir -p tomcat/webapps/ROOT/fonts
+cp app/fonts/*.ttf tomcat/webapps/ROOT/fonts/ 2>/dev/null || true
+bash deploy/patch-preconfig.sh tomcat/webapps/ROOT deploy/drawio-config.json || true
 
 ( cd exporter && PORT=8001 DRAWIO_URL=http://127.0.0.1:8080 exec node svg-export.js ) >> "$INSTALL_DIR/logs/exporter.log" 2>&1 & pids="\$pids \$!"
 
