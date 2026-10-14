@@ -21,10 +21,17 @@
   #msg { margin-left: auto; color: #9aa3b2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
   #msg.err { color: #ff8a80; }
   main { flex: 1; display: flex; min-height: 0; }
-  #left { width: 42%; min-width: 280px; display: flex; flex-direction: column; border-right: 1px solid #2c313c; }
+  #left { width: 42%; min-width: 0; display: flex; flex-direction: column; }
+  #splitter { flex: none; width: 6px; cursor: col-resize; background: #1d2027; border-left: 1px solid #2c313c; }
+  #splitter:hover, #splitter.active { background: #2b6cb0; }
+  body.dragging { user-select: none; cursor: col-resize; }
+  body.collapsed #left, body.collapsed #splitter { display: none; }
   #src { flex: 1; resize: none; border: 0; outline: 0; background: #0f1115; color: #a5d6a7; font: 12px/1.45 "Cascadia Code", Consolas, monospace; padding: 10px; white-space: pre; overflow: auto; }
-  #right { flex: 1; min-width: 0; }
-  #drawio { width: 100%; height: 100%; border: 0; background: #fff; }
+  #right { flex: 1; min-width: 0; position: relative; display: flex; }
+  #expandStrip { display: none; flex: none; width: 20px; background: #1d2027; border-right: 1px solid #2c313c; color: #8ab4f8; cursor: pointer; align-items: center; justify-content: center; font-size: 14px; writing-mode: vertical-rl; letter-spacing: 2px; }
+  body.collapsed #expandStrip { display: flex; }
+  #expandStrip:hover { background: #2b6cb0; color: #fff; }
+  #drawio { flex: 1; min-width: 0; height: 100%; border: 0; background: #fff; }
 </style>
 </head>
 <body>
@@ -32,15 +39,20 @@
   <b>draw.io 节点</b> <span id="nid"></span>
   <span><span id="wsDot" class="dot off"></span>通道</span>
   <span><span id="edDot" class="dot off"></span>编辑器</span>
+  <button id="btnToggleSrc" class="ghost" title="收起/展开左侧源码面板">« 源码</button>
   <button id="btnPull" title="从右侧编辑器取回当前图形 XML 到左侧">更新源码</button>
   <button id="btnPush" class="ghost" title="把左侧源码载入右侧编辑器">应用到编辑器</button>
   <button id="btnCheck" class="ghost" title="对左侧源码做编译检查">检查错误</button>
   <label><input type="checkbox" id="fmt" checked>格式化</label>
   <span id="msg"></span>
 </header>
-<main>
+<main id="main">
   <section id="left"><textarea id="src" spellcheck="false"></textarea></section>
-  <section id="right"><iframe id="drawio" allow="clipboard-read; clipboard-write"></iframe></section>
+  <div id="splitter" title="拖动调整源码区宽度，双击折叠"></div>
+  <section id="right">
+    <div id="expandStrip" title="展开源码面板">源码 »</div>
+    <iframe id="drawio" allow="clipboard-read; clipboard-write"></iframe>
+  </section>
 </main>
 <script>
 (function () {
@@ -48,6 +60,7 @@
   var nodeId = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
   var $ = function (id) { return document.getElementById(id); };
   var iframe = $('drawio'), src = $('src'), msg = $('msg');
+  var mainEl = $('main'), leftEl = $('left'), splitter = $('splitter'), expandStrip = $('expandStrip');
 
   $('nid').textContent = nodeId;
   iframe.src = '/?embed=1&proto=json&spin=1&analytics=0&picker=0&autosave=1&saveAndExit=0&noExitBtn=1&lang=zh';
@@ -59,6 +72,51 @@
 
   function say(t, isErr) { msg.textContent = t; msg.className = isErr ? 'err' : ''; }
   function setDot(el, on) { el.className = 'dot ' + (on ? 'on' : 'off'); }
+
+  // ---------- 源码面板：调宽 + 折叠 ----------
+
+  var MIN_W = 200;
+
+  function applyWidth(px) {
+    var max = Math.max(MIN_W, mainEl.clientWidth - 240);
+    var w = Math.max(MIN_W, Math.min(px, max));
+    leftEl.style.width = w + 'px';
+    try { localStorage.setItem('node.leftWidth', String(w)); } catch (e) {}
+  }
+
+  function setCollapsed(c) {
+    document.body.classList.toggle('collapsed', c);
+    $('btnToggleSrc').textContent = c ? '» 源码' : '« 源码';
+    try { localStorage.setItem('node.collapsed', c ? '1' : '0'); } catch (e) {}
+  }
+
+  splitter.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    splitter.classList.add('active');
+    document.body.classList.add('dragging');
+    try { splitter.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  splitter.addEventListener('pointermove', function (e) {
+    if (!splitter.classList.contains('active')) return;
+    applyWidth(e.clientX - mainEl.getBoundingClientRect().left);
+  });
+  function endDrag() {
+    splitter.classList.remove('active');
+    document.body.classList.remove('dragging');
+  }
+  splitter.addEventListener('pointerup', endDrag);
+  splitter.addEventListener('pointercancel', endDrag);
+  splitter.addEventListener('dblclick', function () { setCollapsed(true); });
+  $('btnToggleSrc').onclick = function () { setCollapsed(!document.body.classList.contains('collapsed')); };
+  expandStrip.onclick = function () { setCollapsed(false); };
+
+  (function restoreLayout() {
+    var savedW = parseInt(localStorage.getItem('node.leftWidth') || '', 10);
+    if (savedW) leftEl.style.width = savedW + 'px';
+    setCollapsed(localStorage.getItem('node.collapsed') === '1');
+  })();
+
+  // ---------- XML 展示 ----------
 
   function pretty(xml) {
     if (!$('fmt').checked) return xml;
@@ -81,6 +139,8 @@
   }
 
   function setSrc(xml) { src.value = pretty(xml); }
+
+  // ---------- 与嵌入编辑器通信（drawio embed 协议） ----------
 
   function postToEditor(obj) {
     if (editorReady) iframe.contentWindow.postMessage(JSON.stringify(obj), '*');
@@ -119,6 +179,8 @@
     }
   });
 
+  // ---------- 与服务器通信（WebSocket 通道） ----------
+
   function connectWs() {
     ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '/ws?node=' + encodeURIComponent(nodeId));
     ws.onopen = function () { setDot($('wsDot'), true); };
@@ -141,6 +203,8 @@
       }
     };
   }
+
+  // ---------- 按钮 ----------
 
   $('btnPull').onclick = function () {
     requestExport(function (x) { setSrc(x); reportXml(x); say('源码已更新'); });
