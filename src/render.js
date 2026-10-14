@@ -42,3 +42,7 @@ export async function renderDiagram(xml, format, extra = {}) {
   }
   throw lastError || new Error('no render endpoint configured');
 }
+
+export function renderEndpoints() {
+  return { raster: RASTER_URLS, svg: SVG_URLS };
+}

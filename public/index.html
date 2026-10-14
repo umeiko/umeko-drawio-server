@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>draw.io 节点入口</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #14161a; color: #dfe3ea; font: 14px/1.6 "Segoe UI", system-ui, sans-serif; display: flex; justify-content: center; padding: 48px 16px; }
+  .wrap { width: 100%; max-width: 560px; }
+  h1 { font-size: 20px; color: #8ab4f8; margin: 0 0 4px; }
+  .sub { color: #9aa3b2; font-size: 12px; margin-bottom: 24px; }
+  .card { background: #1d2027; border: 1px solid #2c313c; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: #dfe3ea; }
+  input[type=text] { width: 100%; background: #0f1115; border: 1px solid #3a4150; border-radius: 4px; color: #dfe3ea; padding: 8px 10px; font: 13px Consolas, monospace; outline: none; }
+  input[type=text]:focus { border-color: #2b6cb0; }
+  button { background: #2b6cb0; border: 0; color: #fff; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #3182ce; }
+  button.ghost { background: #3a4150; }
+  button.ghost:hover { background: #495163; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .hint { color: #9aa3b2; font-size: 12px; margin-top: 10px; }
+  .err { color: #ff8a80; font-size: 12px; margin-top: 8px; }
+  #created { display: none; }
+  #created .nid { font: 18px Consolas, monospace; color: #a5d6a7; letter-spacing: 1px; }
+  #created a { color: #8ab4f8; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 6px 4px; border-bottom: 1px solid #2c313c; }
+  td.id { font-family: Consolas, monospace; color: #a5d6a7; }
+  td a { color: #8ab4f8; text-decoration: none; }
+  td a:hover { text-decoration: underline; }
+  td .del { color: #ff8a80; cursor: pointer; }
+  .empty { color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>draw.io 节点入口</h1>
+  <div class="sub">每个节点是一块独立画布：左侧 XML 源码，右侧完整 draw.io 编辑器。空闲 30 分钟自动转冷存储，冷存储保留 48 小时。</div>
+
+  <div class="card">
+    <h2>进入已有画布</h2>
+    <input type="text" id="nid" placeholder="输入节点 ID（12 位）" autocomplete="off" spellcheck="false">
+    <div class="row"><button id="go">进入画布</button></div>
+    <div class="err" id="goErr"></div>
+  </div>
+
+  <div class="card">
+    <h2>申请新节点</h2>
+    <input type="text" id="title" placeholder="标题（可选），如：网络拓扑图" autocomplete="off">
+    <div class="row"><button id="create">申请新节点 ID</button></div>
+    <div id="created">
+      <div class="hint">节点 ID（把它交给你的 agent，配合 MCP 地址 <span id="mcpUrl"></span> 继续工作）：</div>
+      <div class="nid" id="newId"></div>
+      <div class="row">
+        <button class="ghost" id="copyId">复制 ID</button>
+        <button class="ghost" id="copyUrl">复制链接</button>
+        <a id="openNew" href="#" target="_blank"><button>打开画布</button></a>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>本浏览器最近使用</h2>
+    <table id="history"><tbody></tbody></table>
+    <div class="empty" id="histEmpty">暂无记录</div>
+  </div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  $('mcpUrl').textContent = location.origin + '/mcp';
+
+  function history() {
+    try { return JSON.parse(localStorage.getItem('node.history') || '[]'); } catch (e) { return []; }
+  }
+  function saveHistory(h) {
+    try { localStorage.setItem('node.history', JSON.stringify(h.slice(0, 20))); } catch (e) {}
+  }
+  function pushHistory(id, title) {
+    var h = history().filter(function (x) { return x.id !== id; });
+    h.unshift({ id: id, title: title || '', at: new Date().toISOString() });
+    saveHistory(h);
+    renderHistory();
+  }
+  function renderHistory() {
+    var h = history();
+    var tb = $('history').querySelector('tbody');
+    tb.innerHTML = '';
+    $('histEmpty').style.display = h.length ? 'none' : '';
+    h.forEach(function (x) {
+      var tr = document.createElement('tr');
+      var when = '';
+      try { when = new Date(x.at).toLocaleString(); } catch (e) {}
+      tr.innerHTML = '<td class="id"><a href="/node/' + encodeURIComponent(x.id) + '">' + x.id + '</a></td>' +
+        '<td></td><td style="color:#9aa3b2">' + when + '</td>' +
+        '<td style="width:30px;text-align:right"><span class="del" title="从列表移除">✕</span></td>';
+      tr.children[1].textContent = x.title || '';
+      tr.querySelector('.del').onclick = function () {
+        saveHistory(history().filter(function (y) { return y.id !== x.id; }));
+        renderHistory();
+      };
+      tr.querySelector('a').addEventListener('click', function () { pushHistory(x.id, x.title); });
+      tb.appendChild(tr);
+    });
+  }
+
+  $('go').onclick = function () {
+    var id = $('nid').value.trim();
+    if (!id) { $('goErr').textContent = '请输入节点 ID'; return; }
+    $('goErr').textContent = '';
+    pushHistory(id, '');
+    location.href = '/node/' + encodeURIComponent(id);
+  };
+  $('nid').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('go').click(); });
+
+  $('create').onclick = async function () {
+    try {
+      var r = await fetch('/api/nodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: $('title').value.trim() }),
+      });
+      var j = await r.json();
+      if (!j.ok) throw new Error(j.error || '创建失败');
+      $('created').style.display = 'block';
+      $('newId').textContent = j.nodeId;
+      $('openNew').href = j.url;
+      pushHistory(j.nodeId, $('title').value.trim());
+      $('copyId').onclick = function () { navigator.clipboard.writeText(j.nodeId); };
+      $('copyUrl').onclick = function () { navigator.clipboard.writeText(j.url); };
+    } catch (e) {
+      $('goErr').textContent = String(e.message || e);
+    }
+  };
+
+  renderHistory();
+})();
+</script>
+</body>
+</html>

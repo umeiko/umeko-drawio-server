@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>umeko drawio 管理面板</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #14161a; color: #dfe3ea; font: 13px/1.6 "Segoe UI", system-ui, sans-serif; padding: 24px; }
+  h1 { font-size: 18px; color: #8ab4f8; margin: 0 0 16px; }
+  h2 { font-size: 14px; margin: 0 0 12px; }
+  .card { background: #1d2027; border: 1px solid #2c313c; border-radius: 8px; padding: 16px 18px; margin-bottom: 16px; }
+  button { background: #2b6cb0; border: 0; color: #fff; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+  button:hover { background: #3182ce; }
+  button.ghost { background: #3a4150; }
+  button.danger { background: #8c3030; }
+  button.danger:hover { background: #a33; }
+  input { background: #0f1115; border: 1px solid #3a4150; border-radius: 4px; color: #dfe3ea; padding: 8px 10px; font-size: 13px; outline: none; width: 220px; }
+  input:focus { border-color: #2b6cb0; }
+  .kv { display: grid; grid-template-columns: 200px 1fr; gap: 2px 16px; font-size: 12px; }
+  .kv div:nth-child(odd) { color: #9aa3b2; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.on { background: #3ddc84; }
+  .dot.off { background: #ff5f57; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: #9aa3b2; font-weight: normal; padding: 6px 8px; border-bottom: 1px solid #3a4150; }
+  td { padding: 6px 8px; border-bottom: 1px solid #2c313c; vertical-align: middle; }
+  td.id { font-family: Consolas, monospace; color: #a5d6a7; }
+  td a { color: #8ab4f8; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: 11px; }
+  .tag.hot { background: #1f3d2b; color: #3ddc84; }
+  .tag.cold { background: #3a3a22; color: #e0c060; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  #xmlView { display: none; }
+  #xmlView textarea { width: 100%; height: 260px; background: #0f1115; color: #a5d6a7; border: 1px solid #3a4150; border-radius: 4px; font: 11px/1.4 Consolas, monospace; padding: 8px; }
+  .err { color: #ff8a80; font-size: 12px; }
+  #login { max-width: 320px; margin: 120px auto; }
+  #panel { display: none; max-width: 1100px; margin: 0 auto; }
+  .act { padding: 2px 8px; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="login" class="card">
+  <h2>管理面板登录</h2>
+  <div class="row" style="flex-direction:column;align-items:stretch">
+    <input id="user" placeholder="账号" autocomplete="username">
+    <input id="pass" type="password" placeholder="密码" autocomplete="current-password">
+    <button id="loginBtn">登录</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="panel">
+  <div class="top">
+    <h1>umeko drawio 管理面板</h1>
+    <div class="row">
+      <button class="ghost" id="refresh">刷新</button>
+      <button class="ghost" id="cleanup">立即清理（冻结空闲/删过期）</button>
+      <button class="danger" id="logout">退出登录</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>服务状态</h2>
+    <div class="kv" id="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>节点（热 + 冷存储）</h2>
+    <table>
+      <thead><tr><th>ID</th><th>标题</th><th>状态</th><th>页面在线</th><th>大小</th><th>创建时间</th><th>最后访问</th><th>操作</th></tr></thead>
+      <tbody id="nodes"></tbody>
+    </table>
+    <div class="err" id="nodesErr"></div>
+  </div>
+
+  <div class="card" id="xmlView">
+    <h2>节点 XML：<span id="xmlNodeId" style="font-family:Consolas,monospace;color:#a5d6a7"></span></h2>
+    <textarea id="xmlText" readonly spellcheck="false"></textarea>
+  </div>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+  function fmtTime(iso) { try { return new Date(iso).toLocaleString(); } catch (e) { return iso; } }
+  function fmtUptime(s) {
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return (h ? h + 'h ' : '') + m + 'm ' + (s % 60) + 's';
+  }
+  function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+  async function api(p, opts) {
+    var r = await fetch(p, opts);
+    if (r.status === 401) { showLogin(); throw new Error('unauthorized'); }
+    return r;
+  }
+
+  function showLogin() { $('login').style.display = 'block'; $('panel').style.display = 'none'; }
+  function showPanel() { $('login').style.display = 'none'; $('panel').style.display = 'block'; }
+
+  $('loginBtn').onclick = async function () {
+    try {
+      var r = await fetch('/manage/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: $('user').value, password: $('pass').value }),
+      });
+      var j = await r.json();
+      if (!j.ok) { $('loginErr').textContent = j.error || '登录失败'; return; }
+      showPanel();
+      load();
+    } catch (e) { $('loginErr').textContent = String(e.message || e); }
+  };
+  $('pass').addEventListener('keydown', function (e) { if (e.key === 'Enter') $('loginBtn').click(); });
+
+  $('logout').onclick = async function () {
+    await fetch('/manage/logout', { method: 'POST' });
+    showLogin();
+  };
+
+  $('refresh').onclick = function () { load(); };
+  $('cleanup').onclick = async function () {
+    var r = await api('/manage/api/cleanup', { method: 'POST' });
+    var j = await r.json();
+    alert('清理完成：冻结 ' + j.frozen + ' 个，删除 ' + j.deleted + ' 个');
+    load();
+  };
+
+  function upstreamRow(name, u) {
+    var dot = u.ok ? '<span class="dot on"></span>' : '<span class="dot off"></span>';
+    var detail = u.ok ? ('HTTP ' + u.status + ' · ' + u.ms + 'ms') : esc(u.error || 'down');
+    return '<div>' + name + '</div><div>' + dot + esc(u.url) + ' · ' + detail + '</div>';
+  }
+
+  async function load() {
+    var s = await (await api('/manage/api/status')).json();
+    var st = s.storage;
+    $('status').innerHTML =
+      '<div>当前时间</div><div>' + esc(s.now) + '</div>' +
+      '<div>运行时长</div><div>' + fmtUptime(s.uptimeSec) + '</div>' +
+      '<div>Node 版本</div><div>' + esc(s.nodeVersion) + '</div>' +
+      '<div>生命周期</div><div>空闲 ' + s.config.hotTtlMinutes + ' 分钟 → 冷存储，冷存储 ' + s.config.coldTtlHours + ' 小时后清理（每 ' + s.config.sweepIntervalSec + 's 扫描）</div>' +
+      '<div>节点统计</div><div>热 ' + s.counts.hot + ' · 冷 ' + s.counts.cold + ' · 页面在线 ' + s.counts.connected + '</div>' +
+      '<div>存储占用</div><div>渲染产物 ' + fmtBytes(st.outputBytes) + ' + 冷存储 ' + fmtBytes(st.coldBytes) + ' = <b>' + fmtBytes(st.totalBytes) + '</b></div>' +
+      upstreamRow('drawio webapp', s.upstream.drawio) +
+      upstreamRow('export-server (PNG)', s.upstream.exportServer) +
+      upstreamRow('svg-exporter (SVG)', s.upstream.svgExporter);
+
+    var n = await (await api('/manage/api/nodes')).json();
+    var tb = $('nodes');
+    tb.innerHTML = '';
+    if (!n.nodes.length) tb.innerHTML = '<tr><td colspan="8" style="color:#666">暂无节点</td></tr>';
+    n.nodes.forEach(function (x) {
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td class="id"><a href="' + x.url + '" target="_blank">' + esc(x.id) + '</a></td>' +
+        '<td></td>' +
+        '<td><span class="tag ' + x.state + '">' + (x.state === 'hot' ? '热' : '冷') + '</span></td>' +
+        '<td>' + (x.connected ? '●' : '—') + '</td>' +
+        '<td>' + fmtBytes(x.bytes) + '</td>' +
+        '<td>' + fmtTime(x.createdAt) + '</td>' +
+        '<td>' + fmtTime(x.lastSeenAt) + '</td>' +
+        '<td class="row">' +
+          '<button class="ghost act" data-a="xml">XML</button>' +
+          (x.state === 'hot'
+            ? '<button class="ghost act" data-a="freeze">冻结</button>'
+            : '<button class="ghost act" data-a="thaw">解冻</button>') +
+          '<button class="danger act" data-a="del">删除</button>' +
+        '</td>';
+      tr.children[1].textContent = x.title || '';
+      tb.appendChild(tr);
+      tr.querySelectorAll('button').forEach(function (b) {
+        b.onclick = function () { nodeAction(x, b.dataset.a); };
+      });
+    });
+  }
+
+  async function nodeAction(x, a) {
+    try {
+      if (a === 'xml') {
+        var r = await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/xml');
+        if (!r.ok) throw new Error('节点不存在或已过期');
+        $('xmlView').style.display = 'block';
+        $('xmlNodeId').textContent = x.id;
+        $('xmlText').value = await r.text();
+        $('xmlView').scrollIntoView({ behavior: 'smooth' });
+      } else if (a === 'freeze') {
+        await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/freeze', { method: 'POST' });
+        load();
+      } else if (a === 'thaw') {
+        await api('/manage/api/nodes/' + encodeURIComponent(x.id) + '/thaw', { method: 'POST' });
+        load();
+      } else if (a === 'del') {
+        if (!confirm('确认删除节点 ' + x.id + '？该操作不可恢复。')) return;
+        await api('/manage/api/nodes/' + encodeURIComponent(x.id), { method: 'DELETE' });
+        load();
+      }
+    } catch (e) {
+      $('nodesErr').textContent = String(e.message || e);
+    }
+  }
+
+  // 已登录则直接进面板
+  api('/manage/api/status').then(function () { showPanel(); load(); }).catch(function () {});
+})();
+</script>
+</body>
+</html>

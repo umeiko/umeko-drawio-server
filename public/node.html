@@ -231,6 +231,12 @@
 
   (async function init() {
     try {
+      var h = JSON.parse(localStorage.getItem('node.history') || '[]');
+      h = h.filter(function (x) { return x.id !== nodeId; });
+      h.unshift({ id: nodeId, title: '', at: new Date().toISOString() });
+      localStorage.setItem('node.history', JSON.stringify(h.slice(0, 20)));
+    } catch (e) {}
+    try {
       var r = await fetch('/api/nodes/' + encodeURIComponent(nodeId) + '/xml');
       if (r.ok) {
         var t = await r.text();

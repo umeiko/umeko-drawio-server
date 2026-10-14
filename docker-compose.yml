@@ -50,9 +50,14 @@ services:
       EXPORT_URLS: http://export-server:8000/,http://drawio:8080/export
       SVG_EXPORT_URLS: http://svg-exporter:8001/
       PUBLIC_BASE_URL: http://localhost:3000
-      NODE_TTL_HOURS: "24"
+      NODE_HOT_MINUTES: "${NODE_HOT_MINUTES:-30}"
+      NODE_COLD_HOURS: "${NODE_COLD_HOURS:-48}"
+      SWEEP_INTERVAL_SECONDS: "${SWEEP_INTERVAL_SECONDS:-30}"
+      ADMIN_USER: "${ADMIN_USER:-umeko}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-1234}"
     volumes:
       - ./output:/app/output
+      - ./data:/app/data
     depends_on:
       - drawio
       - export-server
