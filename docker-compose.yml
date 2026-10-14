@@ -55,6 +55,8 @@ services:
       NODE_HOT_MINUTES: "${NODE_HOT_MINUTES:-30}"
       NODE_COLD_HOURS: "${NODE_COLD_HOURS:-48}"
       SWEEP_INTERVAL_SECONDS: "${SWEEP_INTERVAL_SECONDS:-30}"
+      # 节点页实时通道：auto(WS优先,失败自动降级SSE) / ws / sse（ALB 不支持 WebSocket 时设为 sse）
+      NODE_TRANSPORT: "${NODE_TRANSPORT:-auto}"
       ADMIN_USER: "${ADMIN_USER:-umeko}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-1234}"
     volumes:

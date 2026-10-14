@@ -167,7 +167,7 @@
         '<td class="id"><a href="' + x.url + '" target="_blank">' + esc(x.id) + '</a></td>' +
         '<td></td>' +
         '<td><span class="tag ' + x.state + '">' + (x.state === 'hot' ? '热' : '冷') + '</span></td>' +
-        '<td>' + (x.connected ? '●' : '—') + '</td>' +
+        '<td>' + (x.connected ? '●' + (x.transport ? ' ' + x.transport.toUpperCase() : '') : '—') + '</td>' +
         '<td>' + fmtBytes(x.bytes) + '</td>' +
         '<td>' + fmtTime(x.createdAt) + '</td>' +
         '<td>' + fmtTime(x.lastSeenAt) + '</td>' +

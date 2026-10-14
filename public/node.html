@@ -37,7 +37,7 @@
 <body>
 <header>
   <b>draw.io 节点</b> <span id="nid"></span>
-  <span><span id="wsDot" class="dot off"></span>通道</span>
+  <span title="实时通道"><span id="wsDot" class="dot off"></span>通道</span>
   <span><span id="edDot" class="dot off"></span>编辑器</span>
   <button id="btnToggleSrc" class="ghost" title="收起/展开左侧源码面板">« 源码</button>
   <button id="btnPull" title="从右侧编辑器取回当前图形 XML 到左侧">更新源码</button>
@@ -68,7 +68,14 @@
   var currentXml = EMPTY_XML;
   var editorReady = false;
   var ws = null;
+  var es = null;
   var exportWaiter = null;
+
+  // 通道传输方式：URL ?transport=ws|sse 优先，其次服务端全局配置，默认 auto（WS 优先，连不上自动降级 SSE）
+  var FORCE_TRANSPORT = new URLSearchParams(location.search).get('transport');
+  var SERVER_TRANSPORT = '__TRANSPORT__';
+  var transportMode = FORCE_TRANSPORT || (SERVER_TRANSPORT === 'auto' ? '' : SERVER_TRANSPORT);
+  var usingSse = transportMode === 'sse';
 
   function say(t, isErr) { msg.textContent = t; msg.className = isErr ? 'err' : ''; }
   function setDot(el, on) { el.className = 'dot ' + (on ? 'on' : 'off'); }
@@ -152,8 +159,88 @@
     postToEditor({ action: 'export', format: 'xml' });
   }
 
-  function wsSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
-  function reportXml(xml) { currentXml = xml; wsSend({ type: 'xml', xml: xml }); }
+  // ---------- 与服务器通信（WebSocket / SSE 双通道） ----------
+
+  function handleServerMessage(m) {
+    if (m.type === 'setXml') {
+      currentXml = m.xml;
+      postToEditor({ action: 'load', xml: m.xml });
+      setSrc(m.xml);
+      say('已接收推送的 XML');
+    } else if (m.type === 'getXml') {
+      requestExport(function (x) {
+        currentXml = x;
+        channelSend({ type: 'xml', requestId: m.requestId, xml: x });
+        setSrc(x);
+      });
+    }
+  }
+
+  function channelSend(o) {
+    if (usingSse) {
+      fetch('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(o),
+      }).catch(function () {});
+    } else if (ws && ws.readyState === 1) {
+      ws.send(JSON.stringify(o));
+    }
+  }
+
+  function connectWs() {
+    var opened = false;
+    // 3 秒内 WS 未连通（如 ALB 不支持 WebSocket）自动降级 SSE；强制 ws 时不降级
+    var fbTimer = setTimeout(function () {
+      if (!opened && transportMode !== 'ws') {
+        usingSse = true;
+        try { ws.close(); } catch (e) {}
+        connectSse();
+      }
+    }, 3000);
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '__BASE__/ws?node=' + encodeURIComponent(nodeId));
+    ws.onopen = function () {
+      opened = true;
+      clearTimeout(fbTimer);
+      setDot($('wsDot'), true);
+      $('wsDot').parentNode.title = 'WebSocket 通道';
+    };
+    ws.onclose = function () {
+      setDot($('wsDot'), false);
+      clearTimeout(fbTimer);
+      if (!opened && transportMode !== 'ws') {
+        usingSse = true;
+        connectSse();
+        return;
+      }
+      if (!usingSse) setTimeout(connectWs, 1500);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (err) { return; }
+      handleServerMessage(m);
+    };
+  }
+
+  function connectSse() {
+    if (es) return;
+    es = new EventSource('__BASE__/api/nodes/' + encodeURIComponent(nodeId) + '/events');
+    es.onopen = function () {
+      setDot($('wsDot'), true);
+      $('wsDot').parentNode.title = 'SSE 通道（ALB 兼容模式）';
+    };
+    es.onerror = function () { setDot($('wsDot'), false); }; // EventSource 自动重连
+    es.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (err) { return; }
+      handleServerMessage(m);
+    };
+  }
+
+  function connect() {
+    if (usingSse) connectSse(); else connectWs();
+  }
 
   window.addEventListener('message', function (e) {
     if (e.source !== iframe.contentWindow || typeof e.data !== 'string') return;
@@ -164,7 +251,7 @@
       setDot($('edDot'), true);
       postToEditor({ action: 'load', xml: currentXml });
     } else if (m.event === 'load') {
-      requestExport(function (x) { setSrc(x); reportXml(x); });
+      requestExport(function (x) { currentXml = x; setSrc(x); channelSend({ type: 'xml', xml: x }); });
     } else if (m.event === 'export') {
       var x = m.data || m.xml || '';
       if (typeof x === 'string' && x.indexOf('data:') === 0) {
@@ -172,48 +259,24 @@
       }
       if (exportWaiter) { var cb = exportWaiter; exportWaiter = null; cb(x); }
     } else if (m.event === 'save') {
-      if (m.xml) reportXml(m.xml); else requestExport(reportXml);
+      if (m.xml) { currentXml = m.xml; channelSend({ type: 'xml', xml: m.xml }); }
+      else requestExport(function (x) { currentXml = x; channelSend({ type: 'xml', xml: x }); });
       say('已从编辑器保存');
     } else if (m.event === 'autosave') {
-      if (m.xml) reportXml(m.xml);
+      if (m.xml) { currentXml = m.xml; channelSend({ type: 'xml', xml: m.xml }); }
     }
   });
-
-  // ---------- 与服务器通信（WebSocket 通道） ----------
-
-  function connectWs() {
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss' : 'ws') + '://' + location.host + '__BASE__/ws?node=' + encodeURIComponent(nodeId));
-    ws.onopen = function () { setDot($('wsDot'), true); };
-    ws.onclose = function () { setDot($('wsDot'), false); setTimeout(connectWs, 1500); };
-    ws.onerror = function () {};
-    ws.onmessage = function (ev) {
-      var m;
-      try { m = JSON.parse(ev.data); } catch (err) { return; }
-      if (m.type === 'setXml') {
-        currentXml = m.xml;
-        postToEditor({ action: 'load', xml: m.xml });
-        setSrc(m.xml);
-        say('已接收推送的 XML');
-      } else if (m.type === 'getXml') {
-        requestExport(function (x) {
-          currentXml = x;
-          wsSend({ type: 'xml', requestId: m.requestId, xml: x });
-          setSrc(x);
-        });
-      }
-    };
-  }
 
   // ---------- 按钮 ----------
 
   $('btnPull').onclick = function () {
-    requestExport(function (x) { setSrc(x); reportXml(x); say('源码已更新'); });
+    requestExport(function (x) { setSrc(x); channelSend({ type: 'xml', xml: x }); say('源码已更新'); });
   };
   $('btnPush').onclick = function () {
     var x = src.value;
     currentXml = x;
     postToEditor({ action: 'load', xml: x });
-    reportXml(x);
+    channelSend({ type: 'xml', xml: x });
     say('已应用到编辑器');
   };
   $('btnCheck').onclick = async function () {
@@ -244,7 +307,7 @@
       }
     } catch (e) {}
     setSrc(currentXml);
-    connectWs();
+    connect();
   })();
 })();
 </script>

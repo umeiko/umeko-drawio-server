@@ -39,6 +39,10 @@ const COLD_TTL_MS = Number(process.env.NODE_COLD_HOURS || 48) * 3600 * 1000;
 const SWEEP_INTERVAL_MS = Number(process.env.SWEEP_INTERVAL_SECONDS || 30) * 1000;
 const ADMIN_USER = process.env.ADMIN_USER || 'umeko';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '1234';
+// 节点页实时通道：auto（WS 优先，失败自动降级 SSE）| ws | sse（ALB 不支持 WebSocket 时设为 sse）
+const NODE_TRANSPORT = ['auto', 'ws', 'sse'].includes(process.env.NODE_TRANSPORT)
+  ? process.env.NODE_TRANSPORT
+  : 'auto';
 const ADMIN_SESSION_MS = 12 * 3600 * 1000;
 const COOKIE_PATH = BASE_PATH || '/';
 
@@ -114,7 +118,10 @@ function sendPage(res, name) {
     html = fs.readFileSync(path.join(__dirname, '..', 'public', name), 'utf8');
     pageCache.set(name, html);
   }
-  res.type('html').set('Cache-Control', 'no-cache').send(html.split('__BASE__').join(BASE_PATH));
+  res
+    .type('html')
+    .set('Cache-Control', 'no-cache')
+    .send(html.split('__BASE__').join(BASE_PATH).split('__TRANSPORT__').join(NODE_TRANSPORT));
 }
 
 // ---------- 管理员会话 ----------
@@ -227,6 +234,36 @@ router.get('/api/nodes/:id/errors', async (req, res) => {
 router.post('/api/validate', async (req, res) => {
   const xml = String((req.body && req.body.xml) ?? '');
   res.json(await validateDeep(xml, !!(req.body && req.body.deep)));
+});
+
+// ---------- 页面实时通道的 SSE 传输（ALB 不支持 WebSocket 时的替代实现） ----------
+// 下行：GET /api/nodes/:id/events（EventSource）；上行：POST /api/nodes/:id/report
+
+router.get('/api/nodes/:id/events', (req, res) => {
+  const n = registry.resolve(req.params.id);
+  if (!n) return notFound(res);
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no', // 禁止 nginx/网关缓冲 SSE
+  });
+  res.write('retry: 3000\n\n');
+  registry.attachSse(n, res);
+  // 25s 心跳，低于 ALB 默认 60s 空闲超时
+  const hb = setInterval(() => {
+    try {
+      res.write(': ping\n\n');
+    } catch {}
+  }, 25000);
+  req.on('close', () => clearInterval(hb));
+});
+
+router.post('/api/nodes/:id/report', express.text({ type: () => true, limit: '25mb' }), (req, res) => {
+  const n = registry.resolve(req.params.id);
+  if (!n) return notFound(res);
+  registry.onMessage(n, typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
+  res.json({ ok: true });
 });
 
 // ---------- XML -> PNG/SVG 渲染服务 ----------

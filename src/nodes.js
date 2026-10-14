@@ -38,7 +38,7 @@ export class NodeRegistry {
       lastSeenAt: Date.now(),
       xml: defaultDiagramXml(),
       lastValidation: null,
-      ws: null,
+      link: null, // 页面实时通道：{ kind: 'ws'|'sse', send(obj), close(code?, reason?) }
       pending: new Map(),
     };
     this.nodes.set(id, node);
@@ -75,7 +75,7 @@ export class NodeRegistry {
       lastSeenAt: Date.now(),
       xml: data.xml,
       lastValidation: data.lastValidation || null,
-      ws: null,
+      link: null,
       pending: new Map(),
     };
     this.nodes.set(node.id, node);
@@ -86,7 +86,7 @@ export class NodeRegistry {
     const n = this.nodes.get(id);
     if (!n) return false;
     try {
-      n.ws && n.ws.close(4002, 'node frozen (idle)');
+      n.link && n.link.close(4002, 'node frozen (idle)');
     } catch {}
     const data = {
       id: n.id,
@@ -110,7 +110,7 @@ export class NodeRegistry {
     const n = this.nodes.get(id);
     if (n) {
       try {
-        n.ws && n.ws.close(4000, 'node deleted');
+        n.link && n.link.close(4000, 'node deleted');
       } catch {}
       this.nodes.delete(id);
       ok = true;
@@ -136,7 +136,7 @@ export class NodeRegistry {
   }
 
   isConnected(n) {
-    return !!n.ws && n.ws.readyState === 1;
+    return !!n.link;
   }
 
   list() {
@@ -147,6 +147,7 @@ export class NodeRegistry {
       createdAt: n.createdAt,
       lastSeenAt: new Date(n.lastSeenAt).toISOString(),
       connected: this.isConnected(n),
+      transport: n.link ? n.link.kind : null,
       bytes: Buffer.byteLength(n.xml || ''),
     }));
     let cold = [];
@@ -166,6 +167,7 @@ export class NodeRegistry {
               createdAt: d.createdAt,
               lastSeenAt: new Date(d.lastSeenAt).toISOString(),
               connected: false,
+              transport: null,
               bytes: st.size,
             };
           } catch {
@@ -208,17 +210,41 @@ export class NodeRegistry {
     return { frozen, deleted };
   }
 
-  attachWs(node, ws) {
-    if (node.ws && node.ws !== ws) {
+  // ---------- 页面实时通道（WebSocket / SSE 两种传输共用） ----------
+
+  _setLink(node, link) {
+    if (node.link && node.link !== link) {
       try {
-        node.ws.close(4001, 'replaced by new connection');
+        node.link.close(4001, 'replaced by new connection');
       } catch {}
     }
-    node.ws = ws;
+    node.link = link;
     this.touch(node);
+  }
+
+  attachWs(node, ws) {
+    const link = {
+      kind: 'ws',
+      send: (o) => ws.send(JSON.stringify(o)),
+      close: (code, reason) => ws.close(code, reason),
+    };
+    this._setLink(node, link);
     ws.on('message', (raw) => this.onMessage(node, raw));
     ws.on('close', () => {
-      if (node.ws === ws) node.ws = null;
+      if (node.link === link) node.link = null;
+    });
+  }
+
+  // SSE：res 为已写好 text/event-stream 响应头的响应对象；上行走 POST /report
+  attachSse(node, res) {
+    const link = {
+      kind: 'sse',
+      send: (o) => res.write(`data: ${JSON.stringify(o)}\n\n`),
+      close: () => res.end(),
+    };
+    this._setLink(node, link);
+    res.on('close', () => {
+      if (node.link === link) node.link = null;
     });
   }
 
@@ -250,8 +276,8 @@ export class NodeRegistry {
 
   // 优先向打开着的页面实时取 XML；页面未连接时返回缓存
   getXml(node, timeoutMs = 8000) {
-    const ws = node.ws;
-    if (!ws || ws.readyState !== 1) return Promise.resolve({ xml: node.xml, source: 'cache' });
+    const link = node.link;
+    if (!link) return Promise.resolve({ xml: node.xml, source: 'cache' });
     const requestId = newId() + newId();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -265,7 +291,7 @@ export class NodeRegistry {
         },
       });
       try {
-        ws.send(JSON.stringify({ type: 'getXml', requestId }));
+        link.send({ type: 'getXml', requestId });
       } catch (e) {
         clearTimeout(timer);
         node.pending.delete(requestId);
@@ -279,7 +305,7 @@ export class NodeRegistry {
     node.xml = xml;
     this.touch(node);
     const pushed = this.isConnected(node);
-    if (pushed) node.ws.send(JSON.stringify({ type: 'setXml', xml }));
+    if (pushed) node.link.send({ type: 'setXml', xml });
     return pushed;
   }
 }

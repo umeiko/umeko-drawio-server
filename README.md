@@ -146,6 +146,7 @@ Streamable HTTP 传输，两个端点：
 | `SWEEP_INTERVAL_SECONDS` | `30` | 生命周期扫描间隔 |
 | `ADMIN_USER` | `umeko` | 管理面板账号 |
 | `ADMIN_PASSWORD` | `1234` | 管理面板密码（**生产部署务必修改**） |
+| `NODE_TRANSPORT` | `auto` | 节点页实时通道：`auto`（WebSocket 优先，连不上自动降级 SSE）、`ws`（仅 WebSocket）、`sse`（仅 SSE，用于不支持 WebSocket 的 ALB） |
 
 以上均可在 `docker-compose.yml` 的 `environment` 中以 `${VAR:-默认}` 形式覆盖，例如：
 
@@ -165,6 +166,19 @@ UMEKO_DRAWIO_SERVER_BASE_URL=https://example.com/drawio docker compose up -d
 - 管理面板会话 Cookie 的 `Path`、节点页 WebSocket 路径同样随前缀调整；
 - 根路径 `/healthz` 始终保留在前缀之外，可直接作为 ALB 目标组健康检查路径；访问裸 `/` 或裸 `/drawio` 会 302 到 `/drawio/`；
 - 前提：ALB **不剥离**前缀（AWS ALB 默认行为）；若网关会剥离前缀，保持该变量不带路径即可（如 `https://example.com`）。
+
+### 不支持 WebSocket 的 ALB
+
+节点页与服务器之间的实时通道默认用 WebSocket；部分 ALB/网关不支持 WS 升级时，可切换为 SSE（Server-Sent Events）实现——下行是普通 HTTP 长响应（`GET /api/nodes/:id/events`），上行走普通 POST（`/api/nodes/:id/report`），任何 HTTP 负载均衡都支持：
+
+```bash
+NODE_TRANSPORT=sse docker compose up -d
+```
+
+- `NODE_TRANSPORT=auto`（默认）：节点页先试 WebSocket，3 秒未连通自动降级 SSE，无需配置即可穿透两种网络环境；
+- 单个页面也可用 URL 参数强制：`/node/:id?transport=sse` 或 `?transport=ws`；
+- SSE 流带 25 秒心跳（低于 ALB 默认 60s 空闲超时）和 `X-Accel-Buffering: no` 反缓冲头；
+- 两种传输功能完全一致（推送 XML、实时取回、在线状态），管理面板「页面在线」列会显示当前传输方式（WS/SSE）。
 
 ## 注意事项
 
