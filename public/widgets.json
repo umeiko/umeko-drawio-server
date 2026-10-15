@@ -1,0 +1,23 @@
+{
+  "widgets": [
+    {
+      "type": "canvas",
+      "name": "drawio_canvas",
+      "title": "draw.io 画布",
+      "entry": "node",
+      "description": "临时 draw.io 编辑器画布节点：用户在入口页手动申请节点 ID，将 ID 交给 agent 后即可通过 MCP 读写 XML、推送修改、渲染 PNG/SVG。",
+      "urls": {
+        "entry": "node",
+        "canvas": "node/{nodeId}"
+      }
+    }
+  ],
+  "tools_allow": [
+    "get_xml",
+    "set_xml",
+    "push_to_editor",
+    "get_errors",
+    "render_diagram"
+  ],
+  "notes": "本文件由主服务静态直出（<base>/widgets.json），路径相对站点根。工具白名单对应 /mcp（用户态）注册的工具；create_node/list_nodes 等开发工具不在白名单内。平台如需不同 schema，直接挂载覆盖 public/widgets.json 即可。"
+}

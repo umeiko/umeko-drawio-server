@@ -127,8 +127,10 @@ Streamable HTTP 传输，两个端点：
 
 | 端点 | 定位 | 工具 |
 | --- | --- | --- |
-| `/mcp` | **用户态**（面向最终用户的 agent） | `create_node`、`delete_node`、`get_xml`、`set_xml`、`get_errors`、`render_diagram`——除 `create_node` 外**每项交互都必须传入 `nodeId`**，无法看到或触达其他人的节点 |
-| `/mcp-dev` | **开发态**（自调试） | 上述全部 + `list_nodes`（列举所有节点及在线状态） |
+| `/mcp` | **用户态**（面向最终用户的 agent） | `delete_node`、`get_xml`、`set_xml`、`push_to_editor`、`get_errors`、`render_diagram`——**每项交互都必须传入 `nodeId`**，无法看到或触达其他人的节点；节点由用户在 `/node` 入口页手动申请 |
+| `/mcp-dev` | **开发态**（自调试） | 上述全部 + `create_node`（编程建节点）、`list_nodes`（列举所有节点及在线状态） |
+
+同一端点支持**多客户端并发连接**：每个 MCP 会话独立创建 server 实例，互不影响。
 
 客户端配置示例（用户态）：
 
@@ -144,15 +146,22 @@ Streamable HTTP 传输，两个端点：
 
 | 工具 | 端点 | 说明 |
 | --- | --- | --- |
-| `create_node` | 两者 | 创建临时编辑器节点 → `{nodeId, url}`（在浏览器打开 url 即可看到节点页） |
+| `create_node` | 仅 `/mcp-dev` | 创建临时编辑器节点 → `{nodeId, url}`（在浏览器打开 url 即可看到节点页）；正式环境请引导用户在 `/node` 入口页手动申请 |
 | `get_xml` | 两者 | 获取节点当前 XML（页面在线则实时取自编辑器） |
-| `set_xml` | 两者 | 校验并推送 XML 修改；不合法时不推送并返回编译错误 |
+| `set_xml` | 两者 | 校验并推送 XML 修改，返回 `{ok, pushed, nodeId, ...}`；不合法时不推送并返回编译错误 |
+| `push_to_editor` | 两者 | `set_xml` 的平台画布交互别名：推送 XML 到打开的编辑器画布，返回 `{ok, pushed, nodeId}`——`pushed=true` 表示页面在线实时接收 |
 | `get_errors` | 两者 | 获取节点当前 XML 的编译错误（`deep=true` 做真实渲染验证） |
 | `render_diagram` | 两者 | 渲染节点/任意 XML 为 png/svg，存到 `output/`，png 直接以图片返回 |
 | `delete_node` | 两者 | 删除节点 |
 | `list_nodes` | 仅 `/mcp-dev` | 列出全部节点及在线状态 |
 
-典型流程：入口页申请节点（或 `create_node`）→ 把 nodeId 交给 agent → `set_xml` 推送图内容 → `get_xml` 取回 → `get_errors` 查错 → `render_diagram` 出图。
+典型流程：用户在 `/node` 入口页申请节点 → 把 nodeId 交给 agent → `set_xml`/`push_to_editor` 推送图内容 → `get_xml` 取回 → `get_errors` 查错 → `render_diagram` 出图。
+
+### 平台集成端点
+
+- **`/widgets.json`**：静态直出的平台 widget 声明（画布 widget + `tools_allow` 工具白名单）。默认内容见 `public/widgets.json`，schema 需要调整时直接挂载覆盖该文件即可（compose：`-v "$PWD/widgets.json:/app/public/widgets.json:ro"`）。
+- **`/skills-mcp`（可选）**：平台技能工具的独立 MCP 端点。设置 `SKILLS_MCP_MODULE=/path/to/tools.mjs` 后自动挂载（路径可用 `SKILLS_MCP_PATH` 改）；模块需导出 `register(mcp, ctx)`，在其中 `mcp.registerTool(...)` 注册自定义工具，`ctx = { registry, validateDiagramXml, renderDiagram, PUBLIC_BASE_URL }`。每个会话独立实例，工具名不会与 `/mcp`、`/mcp-dev` 冲突。
+- **`/editor`**：302 重定向到 `/node`，兼容指向 `/editor` 的旧链接与平台配置。
 
 ## 管理面板 `/manage`
 
@@ -244,3 +253,4 @@ bash deploy/get-fonts.sh   # 下载到 fonts/FZLanTingHeiS-R-GB.ttf（幂等；�
 - PNG/JPG 默认由官方 `jgraph/export-server` 渲染（compose / all-in-one）；`exporter/` 下自研脚本（embed 协议无头导出）渲染 SVG，同时**也支持 PNG/JPG**——裸机 Linux 模式下用它渲染全部格式，可不依赖官方导出服务。
 - PNG 导出如需额外字体（如特定中文字体），放入 `./fonts` 目录即可（挂载到导出服务的 `/usr/share/fonts/drawio`；裸机模式已装 `fonts-noto-cjk`）。方正兰亭黑已内置接入，见「自定义字体」一节。
 - 渲染产物写入 `./output`（挂载到宿主机），可直接通过 `http://localhost:3000/output/<文件名>` 下载；MCP `render_diagram` 返回结果中带 `url` 字段。产物需自行定期清理；冷存储由生命周期自动清理。
+- **内网拉不到 drawio 镜像时**：可把 drawio webapp 的静态文件（draw.war 解压内容）放到本机目录，设 `DRAWIO_STATIC_DIR=/path/to/webapp` 后根路径改为 `express.static` 直出，不再反向代理 drawio 容器；管理面板的上游状态会显示为 `static` 模式。注意纯静态直出缺少 webapp 的 `/export` 服务端，PNG/SVG 渲染需走本仓库的 svg-exporter（embed 协议无头导出，不依赖 webapp 服务端），并把 svg-exporter 的 `DRAWIO_URL` 指向主服务自身（如 `http://server:3000`），让无头 Chrome 从静态直出的页面加载编辑器。

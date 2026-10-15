@@ -69,6 +69,11 @@ services:
       NODE_TRANSPORT: "${NODE_TRANSPORT:-auto}"
       ADMIN_USER: "${ADMIN_USER:-umeko}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:-1234}"
+      # 编辑器静态直出（内网拉不到镜像时启用）：指向本机 drawio webapp 目录，设置后不再反代 drawio 容器
+      DRAWIO_STATIC_DIR: "${DRAWIO_STATIC_DIR:-}"
+      # 平台技能工具端点（可选）：ESM 模块路径，挂载到 /skills-mcp（可用 SKILLS_MCP_PATH 改路径）
+      SKILLS_MCP_MODULE: "${SKILLS_MCP_MODULE:-}"
+      SKILLS_MCP_PATH: "${SKILLS_MCP_PATH:-}"
     volumes:
       - ./output:/app/output
       - ./data:/app/data

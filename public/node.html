@@ -266,7 +266,20 @@
     } else if (m.event === 'export') {
       var x = m.data || m.xml || '';
       if (typeof x === 'string' && x.indexOf('data:') === 0) {
-        try { x = decodeURIComponent(x.split(',').slice(1).join(',')); } catch (err) {}
+        try {
+          var comma = x.indexOf(',');
+          var meta = x.slice(0, comma);
+          var payload = x.slice(comma + 1);
+          if (meta.indexOf(';base64') >= 0) {
+            // base64 数据（部分版本 format:xml 也回 base64）：按 UTF-8 还原
+            var bin = atob(payload);
+            var bytes = new Uint8Array(bin.length);
+            for (var bi = 0; bi < bin.length; bi++) bytes[bi] = bin.charCodeAt(bi);
+            x = new TextDecoder('utf-8').decode(bytes);
+          } else {
+            x = decodeURIComponent(payload);
+          }
+        } catch (err) {}
       }
       if (exportWaiter) { var cb = exportWaiter; exportWaiter = null; cb(x); }
     } else if (m.event === 'save') {

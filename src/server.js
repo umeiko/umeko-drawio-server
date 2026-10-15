@@ -16,6 +16,9 @@ import { renderDiagram, renderEndpoints } from './render.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3000);
 const DRAWIO_URL = (process.env.DRAWIO_URL || 'http://localhost:8081').replace(/\/$/, '');
+// 编辑器静态直出模式：设置后根路径用 express.static 直接提供 drawio webapp 静态文件
+// （内网拉不到镜像时，可把 draw.war 解压/ webapp 目录拷到本机指过来），不再走反向代理
+const DRAWIO_STATIC_DIR = (process.env.DRAWIO_STATIC_DIR || '').replace(/\/+$/, '');
 // 对外基础地址：UMEKO_DRAWIO_SERVER_BASE_URL 显式指定（可含 ALB 路径前缀），否则回退 PUBLIC_BASE_URL
 const PUBLIC_BASE_URL = (
   process.env.UMEKO_DRAWIO_SERVER_BASE_URL ||
@@ -320,7 +323,9 @@ router.get('/manage/api/status', requireAdmin, async (req, res) => {
   const [outputBytes, coldBytes, drawio, raster, svg] = await Promise.all([
     dirSize(OUTPUT_DIR),
     dirSize(COLD_DIR),
-    probe(`${DRAWIO_URL}/`),
+    DRAWIO_STATIC_DIR
+      ? { ok: fs.existsSync(path.join(DRAWIO_STATIC_DIR, 'index.html')), mode: 'static' }
+      : probe(`${DRAWIO_URL}/`),
     probe(endpoints.raster[0]),
     probe(`${endpoints.svg[0].replace(/\/$/, '')}/health`),
   ]);
@@ -344,7 +349,7 @@ router.get('/manage/api/status', requireAdmin, async (req, res) => {
     },
     storage: { outputBytes, coldBytes, totalBytes: outputBytes + coldBytes },
     upstream: {
-      drawio: { url: DRAWIO_URL, ...drawio },
+      drawio: DRAWIO_STATIC_DIR ? { dir: DRAWIO_STATIC_DIR, ...drawio } : { url: DRAWIO_URL, ...drawio },
       exportServer: { url: endpoints.raster[0], ...raster },
       svgExporter: { url: endpoints.svg[0], ...svg },
     },
@@ -400,18 +405,20 @@ function createMcpServer(mode) {
   });
   const LIFECYCLE_NOTE = `节点空闲 ${HOT_TTL_MS / 60000} 分钟自动转冷存储，冷存储保留 ${COLD_TTL_MS / 3600000} 小时后清理；访问冷节点会自动解冻。`;
 
-  mcp.registerTool(
-    'create_node',
-    {
-      title: '创建 draw.io 编辑器节点',
-      description: `创建一个临时 draw.io 编辑器节点，返回 nodeId 和可在浏览器打开的 URL（左侧源码，右侧完整编辑器）。${LIFECYCLE_NOTE}`,
-      inputSchema: { title: z.string().optional() },
-    },
-    async ({ title }) => {
-      const n = registry.create(title || '');
-      return ok({ ok: true, nodeId: n.id, url: nodeUrl(n.id) });
-    },
-  );
+  if (isDev) {
+    mcp.registerTool(
+      'create_node',
+      {
+        title: '创建 draw.io 编辑器节点（开发）',
+        description: `创建一个临时 draw.io 编辑器节点，返回 nodeId 和可在浏览器打开的 URL（左侧源码，右侧完整编辑器）。${LIFECYCLE_NOTE}仅限开发调试使用；正式环境用户应在 /node 入口页手动申请节点。`,
+        inputSchema: { title: z.string().optional() },
+      },
+      async ({ title }) => {
+        const n = registry.create(title || '');
+        return ok({ ok: true, nodeId: n.id, url: nodeUrl(n.id) });
+      },
+    );
+  }
 
   mcp.registerTool(
     'delete_node',
@@ -446,6 +453,27 @@ function createMcpServer(mode) {
     },
   );
 
+  const pushXml = async (nodeId, xml) => {
+    const n = registry.resolve(nodeId);
+    if (!n) return bad('node not found or expired');
+    const v = validateDiagramXml(xml);
+    n.lastValidation = { ...v, at: new Date().toISOString(), source: 'push' };
+    if (!v.ok) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: v.errors, warnings: v.warnings }, null, 2) }],
+        isError: true,
+      };
+    }
+    const pushed = registry.setXml(n, xml);
+    return ok({
+      ok: true,
+      pushed,
+      nodeId: n.id,
+      warnings: v.warnings,
+      note: pushed ? '已推送到打开的编辑器页面' : '页面未连接，已缓存，打开节点页后自动加载',
+    });
+  };
+
   mcp.registerTool(
     'set_xml',
     {
@@ -454,25 +482,18 @@ function createMcpServer(mode) {
         '按 nodeId 校验并推送 draw.io XML：页面在线则实时载入编辑器，离线则缓存待打开时加载。XML 不合法时不推送，返回编译错误列表。',
       inputSchema: { nodeId: z.string(), xml: z.string() },
     },
-    async ({ nodeId, xml }) => {
-      const n = registry.resolve(nodeId);
-      if (!n) return bad('node not found or expired');
-      const v = validateDiagramXml(xml);
-      n.lastValidation = { ...v, at: new Date().toISOString(), source: 'push' };
-      if (!v.ok) {
-        return {
-          content: [{ type: 'text', text: JSON.stringify({ ok: false, errors: v.errors, warnings: v.warnings }, null, 2) }],
-          isError: true,
-        };
-      }
-      const pushed = registry.setXml(n, xml);
-      return ok({
-        ok: true,
-        pushed,
-        warnings: v.warnings,
-        note: pushed ? '已推送到打开的编辑器页面' : '页面未连接，已缓存，打开节点页后自动加载',
-      });
+    async ({ nodeId, xml }) => pushXml(nodeId, xml),
+  );
+
+  mcp.registerTool(
+    'push_to_editor',
+    {
+      title: '推送 XML 到编辑器画布',
+      description:
+        '按 nodeId 校验并把 draw.io XML 推送到打开的编辑器画布，返回 pushed（页面是否在线实时接收）与 nodeId。页面离线时自动缓存，打开节点页后加载。功能与 set_xml 相同，供平台画布交互使用。',
+      inputSchema: { nodeId: z.string(), xml: z.string() },
     },
+    async ({ nodeId, xml }) => pushXml(nodeId, xml),
   );
 
   mcp.registerTool(
@@ -563,29 +584,34 @@ function createMcpServer(mode) {
   return mcp;
 }
 
-function mountMcp(mountPath, mcpServer) {
-  const transports = Object.create(null);
+// makeServer 为工厂函数：每个 MCP 会话创建独立 McpServer 实例，
+// 否则第二个并发客户端 connect 时会抛 "Already connected to a transport"
+function mountMcp(mountPath, makeServer) {
+  const sessions = Object.create(null); // sid -> { transport, server }
 
   router.post(mountPath, express.json({ limit: '10mb' }), async (req, res) => {
     try {
       const sid = req.headers['mcp-session-id'];
-      let transport = sid ? transports[sid] : undefined;
-      if (!transport) {
+      let session = sid ? sessions[sid] : undefined;
+      if (!session) {
         if (sid) {
           return res.status(404).json({ jsonrpc: '2.0', error: { code: -32001, message: 'unknown session' }, id: null });
         }
-        transport = new StreamableHTTPServerTransport({
+        const server = makeServer();
+        const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomBytes(16).toString('hex'),
           onsessioninitialized: (id) => {
-            transports[id] = transport;
+            sessions[id] = session;
           },
         });
+        session = { transport, server };
         transport.onclose = () => {
-          if (transport.sessionId) delete transports[transport.sessionId];
+          if (transport.sessionId) delete sessions[transport.sessionId];
+          server.close().catch(() => {});
         };
-        await mcpServer.connect(transport);
+        await server.connect(transport);
       }
-      await transport.handleRequest(req, res, req.body);
+      await session.transport.handleRequest(req, res, req.body);
     } catch (e) {
       console.error(`[mcp ${mountPath}]`, e);
       if (!res.headersSent) res.status(500).json({ error: String((e && e.message) || e) });
@@ -593,16 +619,37 @@ function mountMcp(mountPath, mcpServer) {
   });
 
   const sessionHandler = async (req, res) => {
-    const t = transports[req.headers['mcp-session-id']];
-    if (!t) return res.status(404).json({ error: 'unknown session' });
-    await t.handleRequest(req, res);
+    const s = sessions[req.headers['mcp-session-id']];
+    if (!s) return res.status(404).json({ error: 'unknown session' });
+    await s.transport.handleRequest(req, res);
   };
   router.get(mountPath, sessionHandler);
   router.delete(mountPath, sessionHandler);
 }
 
-mountMcp('/mcp', createMcpServer('user'));
-mountMcp('/mcp-dev', createMcpServer('dev'));
+mountMcp('/mcp', () => createMcpServer('user'));
+mountMcp('/mcp-dev', () => createMcpServer('dev'));
+
+// 可选：平台技能工具端点（如 /skills-mcp）。SKILLS_MCP_MODULE 指向一个 ESM 模块，
+// 需导出 register(mcp, ctx)（或默认导出同签名函数），在其中 mcp.registerTool(...) 注册自定义工具。
+// 每个会话同样独立实例；ctx = { registry, validateDiagramXml, renderDiagram, PUBLIC_BASE_URL }。
+if (process.env.SKILLS_MCP_MODULE) {
+  try {
+    const mod = await import(path.resolve(process.env.SKILLS_MCP_MODULE));
+    const register = mod.register || mod.default;
+    if (typeof register !== 'function') throw new Error('模块需导出 register(mcp, ctx)');
+    const skillsPath = process.env.SKILLS_MCP_PATH || '/skills-mcp';
+    const ctx = { registry, validateDiagramXml, renderDiagram, PUBLIC_BASE_URL };
+    mountMcp(skillsPath, () => {
+      const mcp = new McpServer({ name: 'umeko-drawio (skills)', version: '0.2.0' });
+      register(mcp, ctx);
+      return mcp;
+    });
+    console.log(`[mcp] skills 工具端点已挂载: ${skillsPath} (module: ${process.env.SKILLS_MCP_MODULE})`);
+  } catch (e) {
+    console.error(`[mcp] SKILLS_MCP_MODULE 加载失败: ${(e && e.message) || e}`);
+  }
+}
 
 // ---------- 静态文件直出 ----------
 
@@ -613,25 +660,33 @@ router.use('/fonts', express.static(FONTS_DIR, { index: false, maxAge: '30d', im
 // 前端页面静态直出（/node.html、/manage.html 等）；index:false 避免覆盖根路径的编辑器代理
 router.use(express.static(PUBLIC_DIR, { index: false }));
 
-// ---------- draw.io 原生编辑器（反向代理到 drawio 容器，挂在根路径） ----------
+// ---------- draw.io 原生编辑器（静态直出或反向代理，挂在根路径） ----------
 
-router.use(
-  createProxyMiddleware({
-    target: DRAWIO_URL,
-    changeOrigin: true,
-    on: {
-      proxyReq: fixRequestBody,
-      error: (err, req, res) => {
-        try {
-          if (res && res.writeHead && !res.headersSent) {
-            res.writeHead(502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ ok: false, error: 'drawio upstream unavailable', detail: String((err && err.message) || err) }));
-          }
-        } catch {}
+// 旧链接兼容：/editor → /node（AINA 平台等历史配置可能指向 /editor）
+router.get('/editor', (req, res) => res.redirect(`${BASE_PATH}/node`));
+router.get('/editor/', (req, res) => res.redirect(`${BASE_PATH}/node`));
+
+if (DRAWIO_STATIC_DIR) {
+  router.use(express.static(DRAWIO_STATIC_DIR, { index: 'index.html' }));
+} else {
+  router.use(
+    createProxyMiddleware({
+      target: DRAWIO_URL,
+      changeOrigin: true,
+      on: {
+        proxyReq: fixRequestBody,
+        error: (err, req, res) => {
+          try {
+            if (res && res.writeHead && !res.headersSent) {
+              res.writeHead(502, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: 'drawio upstream unavailable', detail: String((err && err.message) || err) }));
+            }
+          } catch {}
+        },
       },
-    },
-  }),
-);
+    }),
+  );
+}
 
 // ---------- 挂载（支持 ALB 路径前缀） ----------
 
