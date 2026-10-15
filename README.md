@@ -159,7 +159,7 @@ Streamable HTTP 传输，两个端点：
 
 ### 平台集成端点
 
-- **`/widgets.json`**：静态直出的平台 widget 声明（画布 widget + `tools_allow` 工具白名单）。默认内容见 `public/widgets.json`，schema 需要调整时直接挂载覆盖该文件即可（compose：`-v "$PWD/widgets.json:/app/public/widgets.json:ro"`）。
+- **`/widgets.json`**：AINA 平台 widget 声明，由主服务**动态生成**（`api` 字段必须是运行时才知道的对外完整 URL——自动取 `UMEKO_DRAWIO_SERVER_BASE_URL`/`PUBLIC_BASE_URL`，含 ALB 前缀）。结构遵循平台规范：`type=drawio-canvas`、`source=iframe`、`props_schema`、`actions=["open"]`、`mode="canvas"`、`scope.tools_allow`（默认含用户态全部工具；`/skills-mcp` 模块导出 `toolsAllow` 数组时自动合并）。可用环境变量覆盖：`WIDGETS_APP`、`WIDGETS_VERSION`、`WIDGETS_ID`、`WIDGETS_TOOLS_ALLOW`（逗号分隔，整体替换白名单）；`WIDGETS_JSON_FILE` 指向完整 JSON 文件时原样直出（平台 schema 变动时的逃生门）。
 - **`/skills-mcp`（可选）**：平台技能工具的独立 MCP 端点。设置 `SKILLS_MCP_MODULE=/path/to/tools.mjs` 后自动挂载（路径可用 `SKILLS_MCP_PATH` 改）；模块需导出 `register(mcp, ctx)`，在其中 `mcp.registerTool(...)` 注册自定义工具，`ctx = { registry, validateDiagramXml, renderDiagram, PUBLIC_BASE_URL }`。每个会话独立实例，工具名不会与 `/mcp`、`/mcp-dev` 冲突。
 - **`/editor`**：302 重定向到 `/node`，兼容指向 `/editor` 的旧链接与平台配置。
 

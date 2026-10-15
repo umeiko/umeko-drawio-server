@@ -74,6 +74,12 @@ services:
       # 平台技能工具端点（可选）：ESM 模块路径，挂载到 /skills-mcp（可用 SKILLS_MCP_PATH 改路径）
       SKILLS_MCP_MODULE: "${SKILLS_MCP_MODULE:-}"
       SKILLS_MCP_PATH: "${SKILLS_MCP_PATH:-}"
+      # AINA 平台 /widgets.json 声明（可选覆盖）：应用名/版本/widget id/工具白名单(逗号分隔)/整体文件
+      WIDGETS_APP: "${WIDGETS_APP:-}"
+      WIDGETS_VERSION: "${WIDGETS_VERSION:-}"
+      WIDGETS_ID: "${WIDGETS_ID:-}"
+      WIDGETS_TOOLS_ALLOW: "${WIDGETS_TOOLS_ALLOW:-}"
+      WIDGETS_JSON_FILE: "${WIDGETS_JSON_FILE:-}"
     volumes:
       - ./output:/app/output
       - ./data:/app/data

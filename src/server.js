@@ -51,6 +51,14 @@ const NODE_TRANSPORT = ['auto', 'ws', 'sse'].includes(process.env.NODE_TRANSPORT
 const ADMIN_SESSION_MS = 12 * 3600 * 1000;
 const COOKIE_PATH = BASE_PATH || '/';
 
+// ---------- /widgets.json（AINA 平台画布声明，动态生成：api 需含对外完整 URL） ----------
+const WIDGETS_APP = process.env.WIDGETS_APP || 'umeko-drawio';
+const WIDGETS_VERSION = process.env.WIDGETS_VERSION || '0.2.0';
+const WIDGET_ID = process.env.WIDGETS_ID || 'drawio-canvas';
+// 工具白名单：默认用户态 /mcp 工具；技能端点模块可通过导出 toolsAllow 数组合并；WIDGETS_TOOLS_ALLOW 整体覆盖
+const DEFAULT_TOOLS_ALLOW = ['set_xml', 'get_xml', 'push_to_editor', 'get_errors', 'render_diagram', 'delete_node'];
+let skillsToolsAllow = [];
+
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const registry = new NodeRegistry({ coldDir: COLD_DIR, hotTtlMs: HOT_TTL_MS, coldTtlMs: COLD_TTL_MS });
@@ -645,6 +653,7 @@ if (process.env.SKILLS_MCP_MODULE) {
       register(mcp, ctx);
       return mcp;
     });
+    if (Array.isArray(mod.toolsAllow)) skillsToolsAllow = mod.toolsAllow.map(String);
     console.log(`[mcp] skills 工具端点已挂载: ${skillsPath} (module: ${process.env.SKILLS_MCP_MODULE})`);
   } catch (e) {
     console.error(`[mcp] SKILLS_MCP_MODULE 加载失败: ${(e && e.message) || e}`);
@@ -652,6 +661,34 @@ if (process.env.SKILLS_MCP_MODULE) {
 }
 
 // ---------- 静态文件直出 ----------
+
+// AINA 平台 widget 声明：动态生成（api 需要运行时才知道的对外完整 URL，含 ALB 前缀）。
+// WIDGETS_JSON_FILE 指向完整 JSON 文件时原样直出，用于平台 schema 变动的整体覆盖。
+router.get('/widgets.json', (req, res) => {
+  if (process.env.WIDGETS_JSON_FILE) {
+    return res.sendFile(path.resolve(process.env.WIDGETS_JSON_FILE));
+  }
+  const toolsAllow = process.env.WIDGETS_TOOLS_ALLOW
+    ? process.env.WIDGETS_TOOLS_ALLOW.split(',').map((s) => s.trim()).filter(Boolean)
+    : [...DEFAULT_TOOLS_ALLOW, ...skillsToolsAllow.filter((t) => !DEFAULT_TOOLS_ALLOW.includes(t))];
+  res.json({
+    app: WIDGETS_APP,
+    version: WIDGETS_VERSION,
+    widgets: {
+      [WIDGET_ID]: {
+        type: 'drawio-canvas',
+        source: 'iframe',
+        api: `${PUBLIC_BASE_URL}/node`,
+        description: '临时 draw.io 编辑器画布：用户在入口页申请节点 ID 并交给 agent，agent 通过 MCP 读写 XML、推送修改、渲染 PNG/SVG。',
+        version: WIDGETS_VERSION,
+        props_schema: { type: 'object', properties: {} },
+        actions: ['open'],
+        mode: 'canvas',
+        scope: { tools_allow: toolsAllow, tools_deny: [] },
+      },
+    },
+  });
+});
 
 // 渲染产物直出：<base>/output/<file> 可直接下载
 router.use('/output', express.static(OUTPUT_DIR, { index: false }));
