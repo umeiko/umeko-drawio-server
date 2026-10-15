@@ -5,3 +5,7 @@ data/
 .DS_Store
 # 方正兰亭黑为公司授权资产，不入仓库；由 deploy/get-fonts.sh 下载
 fonts/*.ttf
+
+# 本地演示文稿工作区（非本项目代码）
+.codex-presentations/
+deliverables/
