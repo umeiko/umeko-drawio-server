@@ -1,0 +1,11 @@
+{"kind":"deck","id":"pr/zho16n","name":"Deck"}
+{"kind":"layout","id":"ly/be183298","editable":false,"name":"Master","type":"master"}
+{"kind":"layout","id":"ly/nexcvyhg","editable":false,"name":"Title Slide","type":"title","placeholders":[{"name":"title","type":"title"},{"name":"subtitle","type":"subtitle"}]}
+{"kind":"layout","id":"ly/i1sfitcv","editable":false,"name":"Section Header","type":"sectionHeader","placeholders":[{"name":"title","type":"title"}]}
+{"kind":"layout","id":"ly/zy94f650","editable":false,"name":"Title and Body","type":"tx","placeholders":[{"name":"title","type":"title"},{"name":"body","type":"body"}]}
+{"kind":"layout","id":"ly/58f6x0b2","editable":false,"name":"Title and Two Column","type":"twoColTx","placeholders":[{"name":"title","type":"title"},{"name":"Left column","type":"body"},{"name":"Right column","type":"body"}]}
+{"kind":"layout","id":"ly/69gf2hcz","editable":false,"name":"Title and One Column","type":"tx","placeholders":[{"name":"title","type":"title"},{"name":"body","type":"body"}]}
+{"kind":"layout","id":"ly/p4za907m","editable":false,"name":"Blank","type":"blank"}
+{"kind":"slide","id":"sl/yx8jxn","slideIndex":0,"layout":{"id":"ly/p4za907m","name":"Blank"},"title":"面向多 Agent 的交互式绘图服务","textShapes":1,"backgroundColor":"rgba(255,255,255,1)"}
+{"kind":"textbox","id":"sh/h07e9ofu","slideIndex":0,"position":{"left":72,"top":72,"width":1120,"height":100},"text":"面向多 Agent 的交互式绘图服务","geometry":"rect","lineWidth":0,"style":{"fontSize":44,"typeface":"Microsoft YaHei","color":"#222222","bold":true,"alignment":"left"}}
+{"kind":"notes","id":"nt/yx8jxn","slideIndex":0,"text":"测试中文字体渲染"}

@@ -55,9 +55,13 @@ const COOKIE_PATH = BASE_PATH || '/';
 const WIDGETS_APP = process.env.WIDGETS_APP || 'umeko-drawio';
 const WIDGETS_VERSION = process.env.WIDGETS_VERSION || '0.2.0';
 const WIDGET_ID = process.env.WIDGETS_ID || 'drawio-canvas';
-// 工具白名单：默认用户态 /mcp 工具；技能端点模块可通过导出 toolsAllow 数组合并；WIDGETS_TOOLS_ALLOW 整体覆盖
+// 工具白名单：默认用户态 /mcp 工具 + 技能端点 toolsAllow 合并；
+// WIDGETS_TOOLS_ALLOW_EXTRA 追加协同业务 MCP 的工具名（逗号分隔，去重合并）；
+// WIDGETS_TOOLS_ALLOW 逗号分隔整体覆盖（逃生门）
 const DEFAULT_TOOLS_ALLOW = ['set_xml', 'get_xml', 'push_to_editor', 'get_errors', 'render_diagram', 'delete_node'];
 let skillsToolsAllow = [];
+const csvEnv = (name) =>
+  (process.env[name] || '').split(',').map((s) => s.trim()).filter(Boolean);
 
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
@@ -669,8 +673,8 @@ router.get('/widgets.json', (req, res) => {
     return res.sendFile(path.resolve(process.env.WIDGETS_JSON_FILE));
   }
   const toolsAllow = process.env.WIDGETS_TOOLS_ALLOW
-    ? process.env.WIDGETS_TOOLS_ALLOW.split(',').map((s) => s.trim()).filter(Boolean)
-    : [...DEFAULT_TOOLS_ALLOW, ...skillsToolsAllow.filter((t) => !DEFAULT_TOOLS_ALLOW.includes(t))];
+    ? csvEnv('WIDGETS_TOOLS_ALLOW')
+    : [...new Set([...DEFAULT_TOOLS_ALLOW, ...skillsToolsAllow, ...csvEnv('WIDGETS_TOOLS_ALLOW_EXTRA')])];
   res.json({
     app: WIDGETS_APP,
     version: WIDGETS_VERSION,
