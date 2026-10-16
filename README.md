@@ -127,8 +127,8 @@ Streamable HTTP 传输，两个端点：
 
 | 端点 | 定位 | 工具 |
 | --- | --- | --- |
-| `/mcp` | **用户态**（面向最终用户的 agent） | `delete_node`、`get_xml`、`set_xml`、`push_to_editor`、`get_errors`、`render_diagram`——**每项交互都必须传入 `nodeId`**，无法看到或触达其他人的节点；节点由用户在 `/node` 入口页手动申请 |
-| `/mcp-dev` | **开发态**（自调试） | 上述全部 + `create_node`（编程建节点）、`list_nodes`（列举所有节点及在线状态） |
+| `/mcp` | **用户态**（面向最终用户的 agent） | `create_node`（用户未给 nodeId 时自建画布）、`get_xml`、`set_xml`、`push_to_editor`、`get_errors`、`render_diagram`——除 `create_node` 外**每项交互都必须传入 `nodeId`**，无法看到或触达其他人的节点；节点**不可删除**，生命周期由服务端自动管理 |
+| `/mcp-dev` | **开发态**（自调试） | 上述全部 + `delete_node`（删节点）、`list_nodes`（列举所有节点及在线状态） |
 
 同一端点支持**多客户端并发连接**：每个 MCP 会话独立创建 server 实例，互不影响。
 
@@ -146,16 +146,16 @@ Streamable HTTP 传输，两个端点：
 
 | 工具 | 端点 | 说明 |
 | --- | --- | --- |
-| `create_node` | 仅 `/mcp-dev` | 创建临时编辑器节点 → `{nodeId, url}`（在浏览器打开 url 即可看到节点页）；正式环境请引导用户在 `/node` 入口页手动申请 |
+| `create_node` | 两者 | 创建临时编辑器节点 → `{nodeId, url}`。**仅在用户没有提供 nodeId 时调用**；用户给了 ID 就直接用 |
 | `get_xml` | 两者 | 获取节点当前 XML（页面在线则实时取自编辑器） |
 | `set_xml` | 两者 | 校验并推送 XML 修改，返回 `{ok, pushed, nodeId, ...}`；不合法时不推送并返回编译错误 |
 | `push_to_editor` | 两者 | `set_xml` 的平台画布交互别名：推送 XML 到打开的编辑器画布，返回 `{ok, pushed, nodeId}`——`pushed=true` 表示页面在线实时接收 |
 | `get_errors` | 两者 | 获取节点当前 XML 的编译错误（`deep=true` 做真实渲染验证） |
 | `render_diagram` | 两者 | 渲染节点/任意 XML 为 png/svg，存到 `output/`，png 直接以图片返回 |
-| `delete_node` | 两者 | 删除节点 |
+| `delete_node` | 仅 `/mcp-dev` | 删除节点（破坏性操作，不开放给用户态；节点过期清理由服务端生命周期自动管理） |
 | `list_nodes` | 仅 `/mcp-dev` | 列出全部节点及在线状态 |
 
-典型流程：用户在 `/node` 入口页申请节点 → 把 nodeId 交给 agent → `set_xml`/`push_to_editor` 推送图内容 → `get_xml` 取回 → `get_errors` 查错 → `render_diagram` 出图。
+典型流程：用户在 `/node` 入口页申请节点（或用户没给 ID 时 agent 调 `create_node`）→ 把 nodeId 交给 agent → `set_xml`/`push_to_editor` 推送图内容 → `get_xml` 取回 → `get_errors` 查错 → `render_diagram` 出图。
 
 ### 平台集成端点
 

@@ -55,10 +55,10 @@ const COOKIE_PATH = BASE_PATH || '/';
 const WIDGETS_APP = process.env.WIDGETS_APP || 'umeko-drawio';
 const WIDGETS_VERSION = process.env.WIDGETS_VERSION || '0.2.0';
 const WIDGET_ID = process.env.WIDGETS_ID || 'drawio-canvas';
-// 工具白名单：默认用户态 /mcp 工具 + 技能端点 toolsAllow 合并；
+// 工具白名单：默认用户态 /mcp 工具（create_node 供用户未给 nodeId 时自建画布；删除由 server 生命周期管理，不开放） + 技能端点 toolsAllow 合并；
 // WIDGETS_TOOLS_ALLOW_EXTRA 追加协同业务 MCP 的工具名（逗号分隔，去重合并）；
 // WIDGETS_TOOLS_ALLOW 逗号分隔整体覆盖（逃生门）
-const DEFAULT_TOOLS_ALLOW = ['set_xml', 'get_xml', 'push_to_editor', 'get_errors', 'render_diagram', 'delete_node'];
+const DEFAULT_TOOLS_ALLOW = ['create_node', 'set_xml', 'get_xml', 'push_to_editor', 'get_errors', 'render_diagram'];
 let skillsToolsAllow = [];
 const csvEnv = (name) =>
   (process.env[name] || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -417,33 +417,33 @@ function createMcpServer(mode) {
   });
   const LIFECYCLE_NOTE = `节点空闲 ${HOT_TTL_MS / 60000} 分钟自动转冷存储，冷存储保留 ${COLD_TTL_MS / 3600000} 小时后清理；访问冷节点会自动解冻。`;
 
+  mcp.registerTool(
+    'create_node',
+    {
+      title: '创建 draw.io 编辑器节点',
+      description: `创建一个临时 draw.io 编辑器节点，返回 nodeId 和可在浏览器打开的 URL（左侧源码，右侧完整编辑器）。当用户没有提供 nodeId 时调用本工具自建画布；用户给了 nodeId 则直接使用，不要重复创建。节点无需删除：${LIFECYCLE_NOTE}`,
+      inputSchema: { title: z.string().optional() },
+    },
+    async ({ title }) => {
+      const n = registry.create(title || '');
+      return ok({ ok: true, nodeId: n.id, url: nodeUrl(n.id) });
+    },
+  );
+
   if (isDev) {
     mcp.registerTool(
-      'create_node',
+      'delete_node',
       {
-        title: '创建 draw.io 编辑器节点（开发）',
-        description: `创建一个临时 draw.io 编辑器节点，返回 nodeId 和可在浏览器打开的 URL（左侧源码，右侧完整编辑器）。${LIFECYCLE_NOTE}仅限开发调试使用；正式环境用户应在 /node 入口页手动申请节点。`,
-        inputSchema: { title: z.string().optional() },
+        title: '删除编辑器节点（开发）',
+        description: '按 nodeId 删除一个编辑器节点（热/冷存储均会移除），并断开其页面连接。仅限开发调试；正式环境节点生命周期由服务端自动管理（空闲转冷、到期清理）。',
+        inputSchema: { nodeId: z.string() },
       },
-      async ({ title }) => {
-        const n = registry.create(title || '');
-        return ok({ ok: true, nodeId: n.id, url: nodeUrl(n.id) });
+      async ({ nodeId }) => {
+        if (!registry.delete(nodeId)) return bad('node not found or expired');
+        return ok({ ok: true });
       },
     );
   }
-
-  mcp.registerTool(
-    'delete_node',
-    {
-      title: '删除编辑器节点',
-      description: '按 nodeId 删除一个编辑器节点（热/冷存储均会移除），并断开其页面连接。',
-      inputSchema: { nodeId: z.string() },
-    },
-    async ({ nodeId }) => {
-      if (!registry.delete(nodeId)) return bad('node not found or expired');
-      return ok({ ok: true });
-    },
-  );
 
   mcp.registerTool(
     'get_xml',
